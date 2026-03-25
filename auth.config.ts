@@ -12,6 +12,7 @@ const authConfig = {
   },
   pages: {
     signIn: "/login",
+    error: "/login",
   },
   callbacks: {
     async jwt({ token, user }) {

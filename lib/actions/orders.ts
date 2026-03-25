@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { OrderStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -53,46 +52,33 @@ export async function getMyOrdersForReception() {
   if (!session?.user || session.user.role !== "RECEPTION") {
     return [];
   }
-  type Row = {
-    id: string;
-    orderNumber: string;
-    createdAt: Date;
-    totalAmount: string;
-    orderStatus: OrderStatus;
-    notes: string | null;
-    customerName: string;
-    customerPhone: string;
-    itemsCount: number;
-  };
 
-  const rows = await prisma.$queryRaw<Row[]>`
-    SELECT
-      o."id",
-      o."orderNumber",
-      o."createdAt",
-      o."totalAmount"::text as "totalAmount",
-      o."orderStatus",
-      o."notes",
-      o."customerName",
-      o."customerPhone",
-      (
-        SELECT COUNT(*) FROM "OrderItem" oi WHERE oi."orderId" = o."id"
-      )::int as "itemsCount"
-    FROM "Order" o
-    WHERE o."createdById" = ${session.user.id}
-    ORDER BY o."createdAt" DESC
-  `;
+  const orders = await prisma.order.findMany({
+    where: { createdById: session.user.id },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      orderNumber: true,
+      createdAt: true,
+      totalAmount: true,
+      orderStatus: true,
+      notes: true,
+      customerName: true,
+      customerPhone: true,
+      _count: { select: { items: true } },
+    },
+  });
 
-  return rows.map((r) => ({
-    id: r.id,
-    orderNumber: r.orderNumber,
-    createdAt: r.createdAt,
-    totalAmount: r.totalAmount,
-    orderStatus: r.orderStatus,
-    notes: r.notes,
-    customerName: r.customerName,
-    customerPhone: r.customerPhone,
-    _count: { items: r.itemsCount },
+  return orders.map((o) => ({
+    id: o.id,
+    orderNumber: o.orderNumber,
+    createdAt: o.createdAt,
+    totalAmount: o.totalAmount.toString(),
+    orderStatus: o.orderStatus,
+    notes: o.notes,
+    customerName: o.customerName,
+    customerPhone: o.customerPhone,
+    _count: { items: o._count.items },
   }));
 }
 
@@ -200,67 +186,35 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
     try {
       const created = await prisma.$transaction(async (tx) => {
         const orderNumber = await generateOrderNumber(tx);
-        const orderId = randomUUID();
 
-        // Always set newly created orders to IN_PROGRESS (reception cannot override).
-        // Use raw SQL inserts so this works even if Prisma client generation is blocked on Windows.
-        const createdOrder = await tx.$queryRaw<
-          { id: string; orderNumber: string }[]
-        >`
-          INSERT INTO "Order" (
-            "id",
-            "orderNumber",
-            "createdById",
-            "notes",
-            "totalAmount",
-            "orderStatus",
-            "customerName",
-            "customerPhone"
-          )
-          VALUES (
-            ${orderId},
-            ${orderNumber},
-            ${session.user!.id},
-            ${notes?.trim() || null},
-            ${total.toString()}::numeric,
-            'IN_PROGRESS'::"OrderStatus",
-            ${customerName},
-            ${customerPhone}
-          )
-          RETURNING "id", "orderNumber"
-        `;
+        // Use proper Prisma create with nested OrderItem creation.
+        // Prisma handles ID generation via @default(cuid()) in the schema.
+        const order = await tx.order.create({
+          data: {
+            orderNumber,
+            createdById: session.user!.id,
+            notes: notes?.trim() || null,
+            totalAmount: total,
+            orderStatus: "IN_PROGRESS",
+            customerName,
+            customerPhone,
+            items: {
+              create: lines.map((l) => ({
+                serviceCategoryId: l.serviceCategoryId,
+                categoryName: l.categoryName,
+                serviceItemId: l.serviceItemId,
+                itemName: l.itemName,
+                quantity: l.quantity,
+                unitPrice: l.unitPrice,
+                lineTotal: l.lineTotal,
+                sortOrder: l.sortOrder,
+              })),
+            },
+          },
+          select: { id: true, orderNumber: true },
+        });
 
-        for (const l of lines) {
-          const orderItemId = randomUUID();
-          await tx.$executeRaw`
-            INSERT INTO "OrderItem" (
-              "id",
-              "orderId",
-              "serviceCategoryId",
-              "categoryName",
-              "serviceItemId",
-              "itemName",
-              "quantity",
-              "unitPrice",
-              "lineTotal",
-              "sortOrder"
-            )
-            VALUES (
-              ${orderItemId},
-              ${orderId},
-              ${l.serviceCategoryId},
-              ${l.categoryName},
-              ${l.serviceItemId},
-              ${l.itemName},
-              ${l.quantity},
-              ${l.unitPrice.toString()}::numeric,
-              ${l.lineTotal.toString()}::numeric,
-              ${l.sortOrder}
-            )
-          `;
-        }
-
-        return { id: createdOrder[0]?.id ?? orderId, orderNumber: createdOrder[0].orderNumber };
+        return order;
       });
 
       revalidatePath("/reception/orders");

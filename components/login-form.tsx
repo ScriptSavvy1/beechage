@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -14,11 +14,33 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+/** Map NextAuth error codes to user-friendly messages */
+function authErrorMessage(code: string | null): string | null {
+  if (!code) return null;
+  switch (code) {
+    case "CredentialsSignin":
+      return "Invalid email or password.";
+    case "Configuration":
+      return "Server configuration error. Please contact the administrator.";
+    case "AccessDenied":
+      return "Access denied. Your account may be inactive.";
+    default:
+      return "An unexpected error occurred. Please try again.";
+  }
+}
+
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
+  const authError = searchParams.get("error");
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Show auth-level errors from NextAuth redirects (e.g. Vercel auth failures)
+  useEffect(() => {
+    const msg = authErrorMessage(authError);
+    if (msg) setFormError(msg);
+  }, [authError]);
 
   const {
     register,
@@ -41,7 +63,6 @@ export function LoginForm() {
       return;
     }
     router.replace(callbackUrl);
-    router.refresh();
   };
 
   return (
@@ -74,7 +95,11 @@ export function LoginForm() {
           <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
         )}
       </div>
-      {formError && <p className="text-sm text-red-600">{formError}</p>}
+      {formError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+          <p className="text-sm text-red-700">{formError}</p>
+        </div>
+      )}
       <button
         type="submit"
         disabled={isSubmitting}

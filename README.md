@@ -54,4 +54,44 @@ If you deploy without running migrations + seed on the production `DATABASE_URL`
 - login failing (no seeded users)
 - empty services/categories (no catalog data)
 
+---
 
+## Security
+
+### Rotating `AUTH_SECRET`
+If your `AUTH_SECRET` has been exposed (e.g., shared in chat logs), rotate it immediately:
+
+```bash
+# 1) Generate a new secret
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# 2) Update your local .env file with the new value
+
+# 3) Update Vercel: Project → Settings → Environment Variables → AUTH_SECRET
+#    Paste the new value and redeploy
+```
+
+> **Note:** Rotating `AUTH_SECRET` will invalidate all existing user sessions. Users will need to log in again.
+
+### Rotating database credentials
+If your `DATABASE_URL` has been exposed:
+
+1. Go to your Prisma Cloud dashboard (or your DB provider)
+2. Generate new credentials / rotate the password
+3. Update `DATABASE_URL` in your local `.env` and in Vercel environment variables
+4. Redeploy on Vercel
+
+### Best practices
+- **Never share `.env` values** in chat exports, emails, or public repositories
+- **Never commit `.env`** to Git (already in `.gitignore`)
+- Use different secrets for local development and production
+
+---
+
+## Testing
+
+Run validation tests:
+
+```bash
+npm test
+```
