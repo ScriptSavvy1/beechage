@@ -2,7 +2,7 @@ import Link from "next/link";
 import { DeleteExpenseButton } from "@/components/expenses/delete-expense-button";
 import { formatCurrency } from "@/lib/format";
 import { getExpensesList } from "@/lib/actions/expenses";
-import { adminExpenseFilterSchema, toDateRange } from "@/lib/validations/filters";
+import { adminExpenseFilterSchema } from "@/lib/validations/filters";
 
 const dateFmt = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -23,20 +23,13 @@ export default async function AdminExpensesPage({ searchParams }: Props) {
   };
   const parsed = adminExpenseFilterSchema.safeParse(raw);
   const filters = parsed.success ? parsed.data : { q: "", categoryId: "", userId: "" };
-  const expenses = await getExpensesList();
-  const q = filters.q?.toLowerCase() ?? "";
-  const range = toDateRange(filters.from, filters.to);
-  const filteredExpenses = expenses.filter((x) => {
-    if (q && !(x.description ?? "").toLowerCase().includes(q) && !x.categoryName.toLowerCase().includes(q))
-      return false;
-    if (filters.categoryId && x.expenseCategoryId !== filters.categoryId) return false;
-    if (filters.userId && x.createdById !== filters.userId) return false;
-    if (range.from && x.expenseDate < range.from) return false;
-    if (range.to && x.expenseDate > range.to) return false;
-    return true;
-  });
-  const categoryOptions = [...new Map(expenses.map((e) => [e.expenseCategoryId, e.categoryName])).entries()];
-  const userOptions = [...new Map(expenses.map((e) => [e.createdById, e.createdBy.name || e.createdBy.email])).entries()];
+  const [filteredExpenses, allExpenses] = await Promise.all([
+    getExpensesList(filters),
+    // Fetch unfiltered for dropdown options (category/user selectors)
+    getExpensesList(),
+  ]);
+  const categoryOptions = [...new Map(allExpenses.map((e) => [e.expenseCategoryId, e.categoryName])).entries()];
+  const userOptions = [...new Map(allExpenses.map((e) => [e.createdById, e.createdBy.name || e.createdBy.email])).entries()];
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">

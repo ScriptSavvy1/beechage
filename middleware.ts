@@ -4,24 +4,17 @@ import { NextResponse } from "next/server";
 
 /**
  * Role checks use JWT only — no Prisma/bcrypt in Edge.
- *
- * IMPORTANT: We explicitly set the cookie name to match what NextAuth v5
- * uses. On HTTPS (Vercel), NextAuth v5 sets the cookie as
- * "__Secure-authjs.session-token", but getToken() may default to the
- * v4 cookie name "next-auth.session-token". This mismatch is why login
- * appeared to succeed but the middleware couldn't read the session.
+ * Keep logic aligned with `lib/auth/server.ts` for server components.
  */
 export async function middleware(req: NextRequest) {
   const secret = process.env.AUTH_SECRET;
-  const isSecure = req.url.startsWith("https://");
+  if (!secret) {
+    console.error("AUTH_SECRET is not set");
+  }
 
   const token = await getToken({
     req,
     secret,
-    // NextAuth v5 cookie name — different on HTTP vs HTTPS
-    cookieName: isSecure
-      ? "__Secure-authjs.session-token"
-      : "authjs.session-token",
   });
 
   const { pathname } = req.nextUrl;

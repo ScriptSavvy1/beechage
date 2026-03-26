@@ -86,7 +86,8 @@ export function OrderForm({ catalog }: Props) {
     startTransition(async () => {
       const result = await createOrder(data);
       if (result.ok) {
-        router.push("/reception/orders");
+        // Redirect to order detail page so the user can print the receipt
+        router.push(`/reception/orders/${result.orderId}`);
         router.refresh();
         return;
       }

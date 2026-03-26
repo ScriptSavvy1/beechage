@@ -47,20 +47,53 @@ export async function getServiceCatalogForReception(): Promise<ServiceCatalogCat
   }));
 }
 
-export async function getMyOrdersForReception() {
+export type OrderFilters = {
+  q?: string;
+  orderStatus?: OrderStatus;
+  from?: string; // YYYY-MM-DD
+  to?: string;   // YYYY-MM-DD
+};
+
+export async function getMyOrdersForReception(filters: OrderFilters = {}) {
   const session = await auth();
   if (!session?.user || session.user.role !== "RECEPTION") {
     return [];
   }
 
+  const where: Prisma.OrderWhereInput = { createdById: session.user.id };
+
+  if (filters.orderStatus) {
+    where.orderStatus = filters.orderStatus;
+  }
+
+  if (filters.from) {
+    where.createdAt = { ...where.createdAt as object, gte: new Date(`${filters.from}T00:00:00.000`) };
+  }
+  if (filters.to) {
+    where.createdAt = { ...where.createdAt as object, lte: new Date(`${filters.to}T23:59:59.999`) };
+  }
+
+  if (filters.q) {
+    const q = filters.q.trim();
+    if (q) {
+      where.OR = [
+        { orderNumber: { contains: q, mode: "insensitive" } },
+        { notes: { contains: q, mode: "insensitive" } },
+        { customerName: { contains: q, mode: "insensitive" } },
+      ];
+    }
+  }
+
   const orders = await prisma.order.findMany({
-    where: { createdById: session.user.id },
+    where,
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
       orderNumber: true,
       createdAt: true,
       totalAmount: true,
+      paidAmount: true,
+      paymentStatus: true,
       orderStatus: true,
       notes: true,
       customerName: true,
@@ -74,6 +107,8 @@ export async function getMyOrdersForReception() {
     orderNumber: o.orderNumber,
     createdAt: o.createdAt,
     totalAmount: o.totalAmount.toString(),
+    paidAmount: o.paidAmount.toString(),
+    paymentStatus: o.paymentStatus,
     orderStatus: o.orderStatus,
     notes: o.notes,
     customerName: o.customerName,
@@ -284,4 +319,88 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
     console.error(e);
     return { ok: false, error: "Could not update status. Try again." };
   }
+}
+
+// ─── Payment ─────────────────────────────────────────────────
+
+const recordPaymentSchema = z.object({
+  orderId: z.string().min(1),
+  amount: z.number().positive("Amount must be greater than 0"),
+});
+
+export type RecordPaymentResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function recordPayment(input: unknown): Promise<RecordPaymentResult> {
+  const session = await auth();
+  if (!session?.user?.id || session.user.role !== "RECEPTION") {
+    return { ok: false, error: "Unauthorized." };
+  }
+
+  const parsed = recordPaymentSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
+  }
+
+  const { orderId, amount } = parsed.data;
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: { id: true, createdById: true, totalAmount: true, paidAmount: true },
+  });
+
+  if (!order || order.createdById !== session.user.id) {
+    return { ok: false, error: "Order not found." };
+  }
+
+  const remaining = order.totalAmount.sub(order.paidAmount).toNumber();
+  if (amount > remaining + 0.001) {
+    return { ok: false, error: `Amount exceeds remaining balance ($${remaining.toFixed(2)}).` };
+  }
+
+  const newPaid = order.paidAmount.add(new Prisma.Decimal(String(amount)));
+  const paymentStatus = newPaid.gte(order.totalAmount) ? "PAID"
+    : newPaid.gt(0) ? "PARTIALLY_PAID"
+    : "UNPAID";
+
+  try {
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { paidAmount: newPaid, paymentStatus },
+    });
+    revalidatePath("/reception/orders");
+    revalidatePath(`/reception/orders/${orderId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not record payment. Try again." };
+  }
+}
+
+// ─── Order Detail ────────────────────────────────────────────
+
+export async function getOrderById(orderId: string) {
+  const session = await auth();
+  if (!session?.user?.id) return null;
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      items: {
+        orderBy: { sortOrder: "asc" },
+        include: { serviceCategory: { select: { name: true } } },
+      },
+      createdBy: { select: { name: true, email: true } },
+    },
+  });
+
+  if (!order) return null;
+
+  // Reception can only view their own orders
+  if (session.user.role === "RECEPTION" && order.createdById !== session.user.id) {
+    return null;
+  }
+
+  return order;
 }

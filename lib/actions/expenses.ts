@@ -25,9 +25,43 @@ export async function getExpenseCategoriesForAdmin() {
   });
 }
 
-export async function getExpensesList() {
+export type ExpenseFilters = {
+  q?: string;
+  categoryId?: string;
+  userId?: string;
+  from?: string; // YYYY-MM-DD
+  to?: string;   // YYYY-MM-DD
+};
+
+export async function getExpensesList(filters: ExpenseFilters = {}) {
   if (!(await requireAdminUserId())) return [];
+
+  const where: Prisma.ExpenseWhereInput = {};
+
+  if (filters.categoryId) {
+    where.expenseCategoryId = filters.categoryId;
+  }
+  if (filters.userId) {
+    where.createdById = filters.userId;
+  }
+  if (filters.from) {
+    where.expenseDate = { ...where.expenseDate as object, gte: new Date(`${filters.from}T00:00:00.000`) };
+  }
+  if (filters.to) {
+    where.expenseDate = { ...where.expenseDate as object, lte: new Date(`${filters.to}T23:59:59.999`) };
+  }
+  if (filters.q) {
+    const q = filters.q.trim();
+    if (q) {
+      where.OR = [
+        { description: { contains: q, mode: "insensitive" } },
+        { categoryName: { contains: q, mode: "insensitive" } },
+      ];
+    }
+  }
+
   return prisma.expense.findMany({
+    where,
     orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
     include: {
       createdBy: { select: { name: true, email: true } },
