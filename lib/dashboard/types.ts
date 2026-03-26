@@ -1,6 +1,6 @@
-import type { OrderStatus, Role } from "@prisma/client";
+import { OrderStatus, Role } from "@/lib/types/enums";
 
-/** Resolved filter set used by Prisma queries (admin dashboard). */
+/** Resolved filter set used by dashboard queries (admin dashboard). */
 export type DashboardFilters = {
   from: Date;
   to: Date;

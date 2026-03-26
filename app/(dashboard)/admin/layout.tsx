@@ -1,13 +1,12 @@
 import { AdminHeader } from "@/components/admin/admin-header";
-import { requireRole } from "@/lib/auth/server";
-import { Role } from "@prisma/client";
+import { requireRole } from "@/lib/auth";
 
 export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await requireRole(Role.ADMIN);
+  await requireRole(["ADMIN"]);
 
   return (
     <div className="min-h-screen bg-zinc-50">

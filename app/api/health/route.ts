@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 
 /**
  * Health-check endpoint: tests DB connectivity from Vercel serverless.
@@ -7,8 +7,14 @@ import { prisma } from "@/lib/prisma";
  */
 export async function GET() {
   try {
-    const count = await prisma.user.count();
-    return NextResponse.json({ ok: true, userCount: count, dbUrl: process.env.DATABASE_URL?.substring(0, 30) + "..." });
+    const supabase = await createClient();
+    const { count, error } = await supabase
+      .from("users")
+      .select("id", { count: "exact", head: true });
+
+    if (error) throw error;
+
+    return NextResponse.json({ ok: true, userCount: count });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("Health check DB error:", msg);

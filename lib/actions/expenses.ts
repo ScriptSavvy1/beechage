@@ -1,9 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 import { expenseFormSchema, updateExpenseSchema } from "@/lib/validations/expense";
 
 export type ExpenseActionResult<T = void> =
@@ -18,11 +18,15 @@ async function requireAdminUserId(): Promise<string | null> {
 
 export async function getExpenseCategoriesForAdmin() {
   if (!(await requireAdminUserId())) return [];
-  return prisma.expenseCategory.findMany({
-    where: { isActive: true },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    select: { id: true, name: true },
-  });
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("ExpenseCategory")
+    .select("id, name")
+    .eq("isActive", true)
+    .order("sortOrder", { ascending: true })
+    .order("name", { ascending: true });
+
+  return data ?? [];
 }
 
 export type ExpenseFilters = {
@@ -36,47 +40,67 @@ export type ExpenseFilters = {
 export async function getExpensesList(filters: ExpenseFilters = {}) {
   if (!(await requireAdminUserId())) return [];
 
-  const where: Prisma.ExpenseWhereInput = {};
+  const supabase = await createClient();
+  let query = supabase
+    .from("Expense")
+    .select("*, createdBy:users(name, email)");
 
   if (filters.categoryId) {
-    where.expenseCategoryId = filters.categoryId;
+    query = query.eq("expenseCategoryId", filters.categoryId);
   }
   if (filters.userId) {
-    where.createdById = filters.userId;
+    query = query.eq("createdById", filters.userId);
   }
   if (filters.from) {
-    where.expenseDate = { ...where.expenseDate as object, gte: new Date(`${filters.from}T00:00:00.000`) };
+    query = query.gte("expenseDate", `${filters.from}T00:00:00.000Z`);
   }
   if (filters.to) {
-    where.expenseDate = { ...where.expenseDate as object, lte: new Date(`${filters.to}T23:59:59.999`) };
+    query = query.lte("expenseDate", `${filters.to}T23:59:59.999Z`);
   }
   if (filters.q) {
     const q = filters.q.trim();
     if (q) {
-      where.OR = [
-        { description: { contains: q, mode: "insensitive" } },
-        { categoryName: { contains: q, mode: "insensitive" } },
-      ];
+      query = query.or(`description.ilike.%${q}%,categoryName.ilike.%${q}%`);
     }
   }
 
-  return prisma.expense.findMany({
-    where,
-    orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
-    include: {
-      createdBy: { select: { name: true, email: true } },
-    },
-  });
+  const { data: expenses } = await query
+    .order("expenseDate", { ascending: false })
+    .order("createdAt", { ascending: false });
+
+  if (!expenses) return [];
+
+  // Return Prisma-compatible shape with Decimal-like objects
+  return expenses.map((e: any) => ({
+    ...e,
+    amount: { toNumber: () => Number(e.amount), toString: () => String(e.amount) },
+    expenseDate: new Date(e.expenseDate),
+    createdAt: new Date(e.createdAt),
+    updatedAt: new Date(e.updatedAt),
+    createdBy: Array.isArray(e.createdBy) ? e.createdBy[0] : e.createdBy,
+  }));
 }
 
 export async function getExpenseById(id: string) {
   if (!(await requireAdminUserId())) return null;
-  return prisma.expense.findUnique({
-    where: { id },
-    include: {
-      createdBy: { select: { id: true, name: true, email: true } },
-    },
-  });
+
+  const supabase = await createClient();
+  const { data: expense } = await supabase
+    .from("Expense")
+    .select("*, createdBy:users(id, name, email)")
+    .eq("id", id)
+    .single();
+
+  if (!expense) return null;
+
+  return {
+    ...expense,
+    amount: { toNumber: () => Number(expense.amount), toString: () => String(expense.amount) },
+    expenseDate: new Date(expense.expenseDate),
+    createdAt: new Date(expense.createdAt),
+    updatedAt: new Date(expense.updatedAt),
+    createdBy: Array.isArray(expense.createdBy) ? expense.createdBy[0] : expense.createdBy,
+  };
 }
 
 export async function createExpense(input: unknown): Promise<ExpenseActionResult<{ id: string }>> {
@@ -96,24 +120,32 @@ export async function createExpense(input: unknown): Promise<ExpenseActionResult
 
   const { expenseCategoryId, amount, expenseDate, description } = parsed.data;
 
-  const category = await prisma.expenseCategory.findFirst({
-    where: { id: expenseCategoryId, isActive: true },
-    select: { id: true, name: true },
-  });
+  const supabase = await createClient();
+  const { data: category } = await supabase
+    .from("ExpenseCategory")
+    .select("id, name")
+    .eq("id", expenseCategoryId)
+    .eq("isActive", true)
+    .single();
+
   if (!category) return { ok: false, error: "Category not found or inactive." };
 
   try {
-    const expense = await prisma.expense.create({
-      data: {
+    const { data: expense, error } = await supabase
+      .from("Expense")
+      .insert({
         expenseCategoryId: category.id,
         categoryName: category.name,
-        amount: new Prisma.Decimal(String(amount)),
-        expenseDate: new Date(expenseDate),
+        amount,
+        expenseDate,
         description: description?.trim() || null,
         createdById: adminId,
-      },
-      select: { id: true },
-    });
+      })
+      .select("id")
+      .single();
+
+    if (error) throw error;
+
     revalidatePath("/admin/expenses");
     return { ok: true, data: { id: expense.id } };
   } catch (e) {
@@ -138,26 +170,38 @@ export async function updateExpense(input: unknown): Promise<ExpenseActionResult
 
   const { id, expenseCategoryId, amount, expenseDate, description } = parsed.data;
 
-  const existing = await prisma.expense.findUnique({ where: { id }, select: { id: true } });
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("Expense")
+    .select("id")
+    .eq("id", id)
+    .single();
+
   if (!existing) return { ok: false, error: "Expense not found." };
 
-  const category = await prisma.expenseCategory.findFirst({
-    where: { id: expenseCategoryId, isActive: true },
-    select: { id: true, name: true },
-  });
+  const { data: category } = await supabase
+    .from("ExpenseCategory")
+    .select("id, name")
+    .eq("id", expenseCategoryId)
+    .eq("isActive", true)
+    .single();
+
   if (!category) return { ok: false, error: "Category not found or inactive." };
 
   try {
-    await prisma.expense.update({
-      where: { id },
-      data: {
+    const { error } = await supabase
+      .from("Expense")
+      .update({
         expenseCategoryId: category.id,
         categoryName: category.name,
-        amount: new Prisma.Decimal(String(amount)),
-        expenseDate: new Date(expenseDate),
+        amount,
+        expenseDate,
         description: description?.trim() || null,
-      },
-    });
+      })
+      .eq("id", id);
+
+    if (error) throw error;
+
     revalidatePath("/admin/expenses");
     revalidatePath(`/admin/expenses/${id}/edit`);
     return { ok: true };
@@ -171,11 +215,23 @@ export async function deleteExpense(id: string): Promise<ExpenseActionResult> {
   const adminId = await requireAdminUserId();
   if (!adminId) return { ok: false, error: "Unauthorized." };
 
-  const existing = await prisma.expense.findUnique({ where: { id }, select: { id: true } });
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("Expense")
+    .select("id")
+    .eq("id", id)
+    .single();
+
   if (!existing) return { ok: false, error: "Expense not found." };
 
   try {
-    await prisma.expense.delete({ where: { id } });
+    const { error } = await supabase
+      .from("Expense")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+
     revalidatePath("/admin/expenses");
     return { ok: true };
   } catch (e) {

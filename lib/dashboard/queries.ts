@@ -1,5 +1,5 @@
-import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { createClient } from "@/lib/supabase/server";
 import {
   dayKey,
   eachDayInRange,
@@ -17,69 +17,106 @@ import type {
   TimeSeriesPoint,
 } from "./types";
 
-function toNumber(d: Prisma.Decimal | null | undefined): number {
+function toNumber(d: any): number {
   if (d === null || d === undefined) return 0;
-  return d.toNumber();
+  return Number(d);
 }
 
 function userLabel(name: string | null, email: string): string {
   return name?.trim() ? name : email;
 }
 
-/** Sales: sum of all order totals in range (no payment filter). */
-function buildSalesOrderWhere(f: DashboardFilters): Prisma.OrderWhereInput {
-  return {
-    createdAt: { gte: f.from, lte: f.to },
-    ...(f.userId ? { createdById: f.userId } : {}),
-    ...(f.serviceCategoryId
-      ? { items: { some: { serviceCategoryId: f.serviceCategoryId } } }
-      : {}),
-  };
-}
-
-function buildAnyOrderWhere(f: DashboardFilters): Prisma.OrderWhereInput {
-  return buildSalesOrderWhere(f);
-}
-
-function buildExpenseWhere(f: DashboardFilters): Prisma.ExpenseWhereInput {
-  return {
-    expenseDate: { gte: f.from, lte: f.to },
-    ...(f.userId ? { createdById: f.userId } : {}),
-    ...(f.expenseCategoryId ? { expenseCategoryId: f.expenseCategoryId } : {}),
-  };
-}
+// ─── KPIs ────────────────────────────────────────────────────
 
 async function computeSalesTotal(f: DashboardFilters): Promise<number> {
+  const supabase = await createClient();
+
   if (f.serviceCategoryId) {
-    const agg = await prisma.orderItem.aggregate({
-      where: {
-        serviceCategoryId: f.serviceCategoryId,
-        order: {
-          createdAt: { gte: f.from, lte: f.to },
-          ...(f.userId ? { createdById: f.userId } : {}),
-        },
-      },
-      _sum: { lineTotal: true },
-    });
-    return toNumber(agg._sum.lineTotal);
+    // Sum lineTotal from OrderItems where serviceCategoryId matches
+    // and the parent order is in date range
+    const { data: items } = await supabase
+      .from("OrderItem")
+      .select("lineTotal, orderId")
+      .eq("serviceCategoryId", f.serviceCategoryId);
+
+    if (!items || items.length === 0) return 0;
+
+    // Get matching orders in date range
+    let orderQuery = supabase
+      .from("Order")
+      .select("id")
+      .gte("createdAt", f.from.toISOString())
+      .lte("createdAt", f.to.toISOString());
+
+    if (f.userId) orderQuery = orderQuery.eq("createdById", f.userId);
+
+    const { data: orders } = await orderQuery;
+    if (!orders) return 0;
+
+    const orderIds = new Set(orders.map(o => o.id));
+    return items
+      .filter(i => orderIds.has(i.orderId))
+      .reduce((sum, i) => sum + toNumber(i.lineTotal), 0);
   }
-  const agg = await prisma.order.aggregate({
-    where: buildSalesOrderWhere(f),
-    _sum: { totalAmount: true },
-  });
-  return toNumber(agg._sum.totalAmount);
+
+  // No category filter: sum order totalAmounts
+  let query = supabase
+    .from("Order")
+    .select("totalAmount")
+    .gte("createdAt", f.from.toISOString())
+    .lte("createdAt", f.to.toISOString());
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+
+  // If serviceCategoryId filter via items.some — we handle above
+  const { data: orders } = await query;
+  if (!orders) return 0;
+
+  return orders.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
 }
 
 async function computeExpensesTotal(f: DashboardFilters): Promise<number> {
-  const agg = await prisma.expense.aggregate({
-    where: buildExpenseWhere(f),
-    _sum: { amount: true },
-  });
-  return toNumber(agg._sum.amount);
+  const supabase = await createClient();
+  let query = supabase
+    .from("Expense")
+    .select("amount")
+    .gte("expenseDate", f.from.toISOString())
+    .lte("expenseDate", f.to.toISOString());
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+  if (f.expenseCategoryId) query = query.eq("expenseCategoryId", f.expenseCategoryId);
+
+  const { data: expenses } = await query;
+  if (!expenses) return 0;
+
+  return expenses.reduce((sum, e) => sum + toNumber(e.amount), 0);
 }
 
 async function computeOrderCount(f: DashboardFilters): Promise<number> {
-  return prisma.order.count({ where: buildAnyOrderWhere(f) });
+  const supabase = await createClient();
+  let query = supabase
+    .from("Order")
+    .select("id", { count: "exact", head: true })
+    .gte("createdAt", f.from.toISOString())
+    .lte("createdAt", f.to.toISOString());
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+
+  if (f.serviceCategoryId) {
+    // Get order IDs that have items in this category
+    const { data: items } = await supabase
+      .from("OrderItem")
+      .select("orderId")
+      .eq("serviceCategoryId", f.serviceCategoryId);
+
+    if (!items || items.length === 0) return 0;
+
+    const orderIds = [...new Set(items.map(i => i.orderId))];
+    query = query.in("id", orderIds);
+  }
+
+  const { count } = await query;
+  return count ?? 0;
 }
 
 async function getKpis(f: DashboardFilters): Promise<DashboardKpis> {
@@ -96,52 +133,18 @@ async function getKpis(f: DashboardFilters): Promise<DashboardKpis> {
   };
 }
 
-function bucketSalesByDay(
-  orders: { createdAt: Date; totalAmount: Prisma.Decimal }[],
-  days: Date[],
-): TimeSeriesPoint[] {
-  const map = new Map<string, number>();
-  for (const d of days) map.set(dayKey(d), 0);
-  for (const o of orders) {
-    const k = dayKey(o.createdAt);
-    if (!map.has(k)) continue;
-    map.set(k, (map.get(k) ?? 0) + toNumber(o.totalAmount));
-  }
-  return days.map((d) => ({
-    date: dayKey(d),
-    label: shortDayLabel(d),
-    value: map.get(dayKey(d)) ?? 0,
-  }));
-}
+// ─── Time series ─────────────────────────────────────────────
 
-function bucketLineSalesByDay(
-  rows: { lineTotal: Prisma.Decimal; order: { createdAt: Date } }[],
+function bucketByDay(
+  rows: { date: Date; value: number }[],
   days: Date[],
 ): TimeSeriesPoint[] {
   const map = new Map<string, number>();
   for (const d of days) map.set(dayKey(d), 0);
   for (const r of rows) {
-    const k = dayKey(r.order.createdAt);
+    const k = dayKey(r.date);
     if (!map.has(k)) continue;
-    map.set(k, (map.get(k) ?? 0) + toNumber(r.lineTotal));
-  }
-  return days.map((d) => ({
-    date: dayKey(d),
-    label: shortDayLabel(d),
-    value: map.get(dayKey(d)) ?? 0,
-  }));
-}
-
-function bucketExpensesByDay(
-  rows: { expenseDate: Date; amount: Prisma.Decimal }[],
-  days: Date[],
-): TimeSeriesPoint[] {
-  const map = new Map<string, number>();
-  for (const d of days) map.set(dayKey(d), 0);
-  for (const r of rows) {
-    const k = dayKey(r.expenseDate);
-    if (!map.has(k)) continue;
-    map.set(k, (map.get(k) ?? 0) + toNumber(r.amount));
+    map.set(k, (map.get(k) ?? 0) + r.value);
   }
   return days.map((d) => ({
     date: dayKey(d),
@@ -151,128 +154,247 @@ function bucketExpensesByDay(
 }
 
 async function getSalesSeries(f: DashboardFilters, days: Date[]): Promise<TimeSeriesPoint[]> {
+  const supabase = await createClient();
+
   if (f.serviceCategoryId) {
-    const rows = await prisma.orderItem.findMany({
-      where: {
-        serviceCategoryId: f.serviceCategoryId,
-        order: {
-          createdAt: { gte: f.from, lte: f.to },
-          ...(f.userId ? { createdById: f.userId } : {}),
-        },
-      },
-      select: { lineTotal: true, order: { select: { createdAt: true } } },
-    });
-    return bucketLineSalesByDay(rows, days);
+    // Get line items for this category with their order's createdAt
+    const { data: items } = await supabase
+      .from("OrderItem")
+      .select("lineTotal, order:Order(createdAt, createdById)")
+      .eq("serviceCategoryId", f.serviceCategoryId);
+
+    if (!items) return bucketByDay([], days);
+
+    const rows = items
+      .filter((i: any) => {
+        const order = Array.isArray(i.order) ? i.order[0] : i.order;
+        if (!order) return false;
+        const d = new Date(order.createdAt);
+        if (d < f.from || d > f.to) return false;
+        if (f.userId && order.createdById !== f.userId) return false;
+        return true;
+      })
+      .map((i: any) => {
+        const order = Array.isArray(i.order) ? i.order[0] : i.order;
+        return { date: new Date(order.createdAt), value: toNumber(i.lineTotal) };
+      });
+
+    return bucketByDay(rows, days);
   }
-  const orders = await prisma.order.findMany({
-    where: buildSalesOrderWhere(f),
-    select: { createdAt: true, totalAmount: true },
-  });
-  return bucketSalesByDay(orders, days);
+
+  let query = supabase
+    .from("Order")
+    .select("createdAt, totalAmount")
+    .gte("createdAt", f.from.toISOString())
+    .lte("createdAt", f.to.toISOString());
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+
+  const { data: orders } = await query;
+  if (!orders) return bucketByDay([], days);
+
+  const rows = orders.map((o: any) => ({
+    date: new Date(o.createdAt),
+    value: toNumber(o.totalAmount),
+  }));
+
+  return bucketByDay(rows, days);
 }
 
 async function getExpensesSeries(f: DashboardFilters, days: Date[]): Promise<TimeSeriesPoint[]> {
-  const rows = await prisma.expense.findMany({
-    where: buildExpenseWhere(f),
-    select: { expenseDate: true, amount: true },
-  });
-  return bucketExpensesByDay(rows, days);
+  const supabase = await createClient();
+  let query = supabase
+    .from("Expense")
+    .select("expenseDate, amount")
+    .gte("expenseDate", f.from.toISOString())
+    .lte("expenseDate", f.to.toISOString());
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+  if (f.expenseCategoryId) query = query.eq("expenseCategoryId", f.expenseCategoryId);
+
+  const { data: expenses } = await query;
+  if (!expenses) return bucketByDay([], days);
+
+  const rows = expenses.map((e: any) => ({
+    date: new Date(e.expenseDate),
+    value: toNumber(e.amount),
+  }));
+
+  return bucketByDay(rows, days);
 }
 
+// ─── Top categories (groupBy equivalent) ─────────────────────
+
 async function getTopItemCategories(f: DashboardFilters, take = 8): Promise<NamedValue[]> {
-  const grouped = await prisma.orderItem.groupBy({
-    by: ["categoryName"],
-    where: {
-      ...(f.serviceCategoryId ? { serviceCategoryId: f.serviceCategoryId } : {}),
-      order: {
-        createdAt: { gte: f.from, lte: f.to },
-        ...(f.userId ? { createdById: f.userId } : {}),
-        ...(f.serviceCategoryId
-          ? { items: { some: { serviceCategoryId: f.serviceCategoryId } } }
-          : {}),
-      },
-    },
-    _sum: { lineTotal: true },
-    orderBy: { _sum: { lineTotal: "desc" } },
+  const supabase = await createClient();
+
+  // Get order items with their order info for filtering
+  let itemQuery = supabase
+    .from("OrderItem")
+    .select("categoryName, lineTotal, order:Order(createdAt, createdById)");
+
+  if (f.serviceCategoryId) {
+    itemQuery = itemQuery.eq("serviceCategoryId", f.serviceCategoryId);
+  }
+
+  const { data: items } = await itemQuery;
+  if (!items) return [];
+
+  // Filter by date range and user
+  const filteredItems = items.filter((i: any) => {
+    const order = Array.isArray(i.order) ? i.order[0] : i.order;
+    if (!order) return false;
+    const d = new Date(order.createdAt);
+    if (d < f.from || d > f.to) return false;
+    if (f.userId && order.createdById !== f.userId) return false;
+    return true;
   });
-  return grouped
-    .slice(0, take)
-    .map((g) => ({
-      name: g.categoryName,
-      value: toNumber(g._sum.lineTotal),
-    }))
-    .filter((x) => x.value > 0);
+
+  // Group by categoryName and sum lineTotal
+  const grouped = new Map<string, number>();
+  for (const item of filteredItems) {
+    const current = grouped.get(item.categoryName) ?? 0;
+    grouped.set(item.categoryName, current + toNumber(item.lineTotal));
+  }
+
+  return [...grouped.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .filter((x) => x.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, take);
 }
 
 async function getTopExpenseCategories(f: DashboardFilters, take = 8): Promise<NamedValue[]> {
-  const grouped = await prisma.expense.groupBy({
-    by: ["categoryName"],
-    where: buildExpenseWhere(f),
-    _sum: { amount: true },
-    orderBy: { _sum: { amount: "desc" } },
-  });
-  return grouped
-    .slice(0, take)
-    .map((g) => ({
-      name: g.categoryName,
-      value: toNumber(g._sum.amount),
-    }))
-    .filter((x) => x.value > 0);
+  const supabase = await createClient();
+  let query = supabase
+    .from("Expense")
+    .select("categoryName, amount")
+    .gte("expenseDate", f.from.toISOString())
+    .lte("expenseDate", f.to.toISOString());
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+  if (f.expenseCategoryId) query = query.eq("expenseCategoryId", f.expenseCategoryId);
+
+  const { data: expenses } = await query;
+  if (!expenses) return [];
+
+  // Group by categoryName and sum amount
+  const grouped = new Map<string, number>();
+  for (const e of expenses) {
+    const current = grouped.get(e.categoryName) ?? 0;
+    grouped.set(e.categoryName, current + toNumber(e.amount));
+  }
+
+  return [...grouped.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .filter((x) => x.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, take);
 }
 
+// ─── Recent rows ─────────────────────────────────────────────
+
 async function getRecentOrders(f: DashboardFilters, take = 8): Promise<RecentOrderRow[]> {
-  const rows = await prisma.order.findMany({
-    where: buildAnyOrderWhere(f),
-    orderBy: { createdAt: "desc" },
-    take,
-    include: { createdBy: { select: { name: true, email: true } } },
+  const supabase = await createClient();
+  let query = supabase
+    .from("Order")
+    .select("id, orderNumber, createdAt, totalAmount, orderStatus, createdBy:users(name, email)")
+    .gte("createdAt", f.from.toISOString())
+    .lte("createdAt", f.to.toISOString())
+    .order("createdAt", { ascending: false })
+    .limit(take);
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+
+  if (f.serviceCategoryId) {
+    const { data: items } = await supabase
+      .from("OrderItem")
+      .select("orderId")
+      .eq("serviceCategoryId", f.serviceCategoryId);
+
+    if (!items || items.length === 0) return [];
+    const orderIds = [...new Set(items.map(i => i.orderId))];
+    query = query.in("id", orderIds);
+  }
+
+  const { data: rows } = await query;
+  if (!rows) return [];
+
+  return rows.map((r: any) => {
+    const createdBy = Array.isArray(r.createdBy) ? r.createdBy[0] : r.createdBy;
+    return {
+      id: r.id,
+      orderNumber: r.orderNumber,
+      createdAt: new Date(r.createdAt).toISOString(),
+      totalAmount: toNumber(r.totalAmount),
+      orderStatus: r.orderStatus,
+      createdByLabel: userLabel(createdBy?.name, createdBy?.email ?? ""),
+    };
   });
-  return rows.map((r) => ({
-    id: r.id,
-    orderNumber: r.orderNumber,
-    createdAt: r.createdAt.toISOString(),
-    totalAmount: r.totalAmount.toNumber(),
-    orderStatus: r.orderStatus,
-    createdByLabel: userLabel(r.createdBy.name, r.createdBy.email),
-  }));
 }
 
 async function getRecentExpenses(f: DashboardFilters, take = 8): Promise<RecentExpenseRow[]> {
-  const rows = await prisma.expense.findMany({
-    where: buildExpenseWhere(f),
-    orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
-    take,
-    include: { createdBy: { select: { name: true, email: true } } },
+  const supabase = await createClient();
+  let query = supabase
+    .from("Expense")
+    .select("id, categoryName, amount, expenseDate, description, createdBy:users(name, email)")
+    .gte("expenseDate", f.from.toISOString())
+    .lte("expenseDate", f.to.toISOString())
+    .order("expenseDate", { ascending: false })
+    .order("createdAt", { ascending: false })
+    .limit(take);
+
+  if (f.userId) query = query.eq("createdById", f.userId);
+  if (f.expenseCategoryId) query = query.eq("expenseCategoryId", f.expenseCategoryId);
+
+  const { data: rows } = await query;
+  if (!rows) return [];
+
+  return rows.map((r: any) => {
+    const createdBy = Array.isArray(r.createdBy) ? r.createdBy[0] : r.createdBy;
+    return {
+      id: r.id,
+      categoryName: r.categoryName,
+      amount: toNumber(r.amount),
+      expenseDate: new Date(r.expenseDate).toISOString(),
+      description: r.description,
+      createdByLabel: userLabel(createdBy?.name, createdBy?.email ?? ""),
+    };
   });
-  return rows.map((r) => ({
-    id: r.id,
-    categoryName: r.categoryName,
-    amount: r.amount.toNumber(),
-    expenseDate: r.expenseDate.toISOString(),
-    description: r.description,
-    createdByLabel: userLabel(r.createdBy.name, r.createdBy.email),
-  }));
 }
 
+// ─── Filter options ──────────────────────────────────────────
+
 async function getFilterOptions(): Promise<DashboardFilterOptions> {
-  const [users, serviceCategories, expenseCategories] = await Promise.all([
-    prisma.user.findMany({
-      where: { isActive: true, role: { in: ["ADMIN", "RECEPTION"] } },
-      orderBy: [{ name: "asc" }, { email: "asc" }],
-      select: { id: true, name: true, email: true, role: true },
-    }),
-    prisma.serviceCategory.findMany({
-      where: { isActive: true },
-      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      select: { id: true, name: true },
-    }),
-    prisma.expenseCategory.findMany({
-      where: { isActive: true },
-      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      select: { id: true, name: true },
-    }),
+  const supabase = await createClient();
+
+  const [usersRes, serviceCatsRes, expenseCatsRes] = await Promise.all([
+    supabase
+      .from("users")
+      .select("id, name, email, role")
+      .eq("isActive", true)
+      .in("role", ["ADMIN", "RECEPTION"])
+      .order("name", { ascending: true })
+      .order("email", { ascending: true }),
+    supabase
+      .from("ServiceCategory")
+      .select("id, name")
+      .eq("isActive", true)
+      .order("sortOrder", { ascending: true })
+      .order("name", { ascending: true }),
+    supabase
+      .from("ExpenseCategory")
+      .select("id, name")
+      .eq("isActive", true)
+      .order("sortOrder", { ascending: true })
+      .order("name", { ascending: true }),
   ]);
-  return { users, serviceCategories, expenseCategories };
+
+  return {
+    users: usersRes.data ?? [],
+    serviceCategories: serviceCatsRes.data ?? [],
+    expenseCategories: expenseCatsRes.data ?? [],
+  };
 }
 
 /** Public entry: load full dashboard snapshot (admin-only callers should guard route). */

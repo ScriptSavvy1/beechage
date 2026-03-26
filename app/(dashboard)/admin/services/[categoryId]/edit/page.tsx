@@ -5,6 +5,13 @@ import { DeactivateCategoryButton } from "@/components/admin/deactivate-category
 import { getServiceCategoryById } from "@/lib/actions/service-catalog";
 import { formatCurrency } from "@/lib/format";
 
+interface CatalogItem {
+  id: string;
+  name: string;
+  isActive: boolean;
+  defaultPrice: { toNumber: () => number; toString: () => string };
+}
+
 type Props = { params: Promise<{ categoryId: string }> };
 
 export default async function EditServiceCategoryPage({ params }: Props) {
@@ -46,7 +53,7 @@ export default async function EditServiceCategoryPage({ params }: Props) {
                 + Add item
               </Link>
               <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto text-sm">
-                {category.items.map((item) => (
+                {category.items.map((item: CatalogItem) => (
                   <li key={item.id} className="flex items-center justify-between gap-2 border-b border-zinc-50 pb-2">
                     <span className={item.isActive ? "text-zinc-800" : "text-zinc-400"}>{item.name}</span>
                     <span className="shrink-0 tabular-nums text-zinc-600">{formatCurrency(item.defaultPrice)}</span>

@@ -1,4 +1,4 @@
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus } from "@/lib/types/enums";
 import { z } from "zod";
 
 const ymd = z

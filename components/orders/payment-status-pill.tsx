@@ -1,6 +1,6 @@
 "use client";
 
-import { PaymentStatus } from "@prisma/client";
+import { PaymentStatus } from "@/lib/types/enums";
 
 const config: Record<PaymentStatus, { label: string; bg: string; text: string }> = {
   UNPAID: { label: "Unpaid", bg: "bg-red-50", text: "text-red-700" },

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import type { OrderStatus } from "@prisma/client";
+import { OrderStatus } from "@/lib/types/enums";
 import { updateMyOrderStatus } from "@/lib/actions/orders";
 
 export function OrderStatusActions({
@@ -17,10 +17,10 @@ export function OrderStatusActions({
   const [isPending, startTransition] = useTransition();
 
   const nextStatus: OrderStatus | null =
-    orderStatus === "IN_PROGRESS"
-      ? "READY"
-      : orderStatus === "READY"
-        ? "PICKED_UP"
+    orderStatus === OrderStatus.IN_PROGRESS
+      ? OrderStatus.READY
+      : orderStatus === OrderStatus.READY
+        ? OrderStatus.PICKED_UP
         : null;
 
   if (!nextStatus) return null;

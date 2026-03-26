@@ -1,9 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 import {
   serviceCategoryFormSchema,
   serviceItemFormSchema,
@@ -21,27 +21,71 @@ async function requireAdminId(): Promise<string | null> {
 
 export async function getServiceCategoriesForAdmin() {
   if (!(await requireAdminId())) return [];
-  return prisma.serviceCategory.findMany({
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    include: {
-      items: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
-    },
-  });
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("ServiceCategory")
+    .select("*, items:ServiceItem(*)")
+    .order("sortOrder", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (!data) return [];
+
+  // Sort nested items & convert defaultPrice to Decimal-compatible
+  return data.map((c: any) => ({
+    ...c,
+    items: (c.items || [])
+      .sort((a: any, b: any) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.name.localeCompare(b.name);
+      })
+      .map((i: any) => ({
+        ...i,
+        defaultPrice: { toNumber: () => Number(i.defaultPrice), toString: () => String(i.defaultPrice) },
+      })),
+  }));
 }
 
 export async function getServiceCategoryById(id: string) {
   if (!(await requireAdminId())) return null;
-  return prisma.serviceCategory.findUnique({
-    where: { id },
-    include: { items: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
-  });
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("ServiceCategory")
+    .select("*, items:ServiceItem(*)")
+    .eq("id", id)
+    .single();
+
+  if (!data) return null;
+
+  return {
+    ...data,
+    items: (data.items || [])
+      .sort((a: any, b: any) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.name.localeCompare(b.name);
+      })
+      .map((i: any) => ({
+        ...i,
+        defaultPrice: { toNumber: () => Number(i.defaultPrice), toString: () => String(i.defaultPrice) },
+      })),
+  };
 }
 
 export async function getServiceItemForEdit(categoryId: string, itemId: string) {
   if (!(await requireAdminId())) return null;
-  return prisma.serviceItem.findFirst({
-    where: { id: itemId, serviceCategoryId: categoryId },
-  });
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("ServiceItem")
+    .select("*")
+    .eq("id", itemId)
+    .eq("serviceCategoryId", categoryId)
+    .single();
+
+  if (!data) return null;
+
+  return {
+    ...data,
+    defaultPrice: { toNumber: () => Number(data.defaultPrice), toString: () => String(data.defaultPrice) },
+  };
 }
 
 export async function createServiceCategory(input: unknown): Promise<ActionResult<{ id: string }>> {
@@ -52,10 +96,15 @@ export async function createServiceCategory(input: unknown): Promise<ActionResul
   }
   const { name, sortOrder, allowsCustomPricing, isActive } = parsed.data;
   try {
-    const row = await prisma.serviceCategory.create({
-      data: { name, sortOrder, allowsCustomPricing, isActive },
-      select: { id: true },
-    });
+    const supabase = await createClient();
+    const { data: row, error } = await supabase
+      .from("ServiceCategory")
+      .insert({ name, sortOrder, allowsCustomPricing, isActive })
+      .select("id")
+      .single();
+
+    if (error) throw error;
+
     revalidatePath("/admin/services");
     revalidatePath("/reception/orders/new");
     return { ok: true, data: { id: row.id } };
@@ -72,21 +121,35 @@ export async function updateServiceCategory(input: unknown): Promise<ActionResul
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
   const { id, name, sortOrder, allowsCustomPricing, isActive } = parsed.data;
-  const existing = await prisma.serviceCategory.findUnique({ where: { id } });
+
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("ServiceCategory")
+    .select("id")
+    .eq("id", id)
+    .single();
+
   if (!existing) return { ok: false, error: "Category not found." };
+
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.serviceCategory.update({
-        where: { id },
-        data: { name, sortOrder, allowsCustomPricing, isActive },
-      });
-      if (allowsCustomPricing) {
-        await tx.serviceItem.updateMany({
-          where: { serviceCategoryId: id },
-          data: { isActive: false },
-        });
-      }
-    });
+    // Update the category
+    const { error: updateError } = await supabase
+      .from("ServiceCategory")
+      .update({ name, sortOrder, allowsCustomPricing, isActive })
+      .eq("id", id);
+
+    if (updateError) throw updateError;
+
+    // If custom pricing enabled, deactivate all catalog items (same as Prisma transaction)
+    if (allowsCustomPricing) {
+      const { error: deactivateError } = await supabase
+        .from("ServiceItem")
+        .update({ isActive: false })
+        .eq("serviceCategoryId", id);
+
+      if (deactivateError) throw deactivateError;
+    }
+
     revalidatePath("/admin/services");
     revalidatePath(`/admin/services/${id}/edit`);
     revalidatePath("/reception/orders/new");
@@ -100,10 +163,14 @@ export async function updateServiceCategory(input: unknown): Promise<ActionResul
 export async function deactivateServiceCategory(id: string): Promise<ActionResult> {
   if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
   try {
-    await prisma.serviceCategory.update({
-      where: { id },
-      data: { isActive: false },
-    });
+    const supabase = await createClient();
+    const { error } = await supabase
+      .from("ServiceCategory")
+      .update({ isActive: false })
+      .eq("id", id);
+
+    if (error) throw error;
+
     revalidatePath("/admin/services");
     revalidatePath("/reception/orders/new");
     return { ok: true };
@@ -118,29 +185,40 @@ export async function createServiceItem(
   input: unknown,
 ): Promise<ActionResult<{ id: string }>> {
   if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
-  const cat = await prisma.serviceCategory.findFirst({
-    where: { id: categoryId, isActive: true },
-  });
+
+  const supabase = await createClient();
+  const { data: cat } = await supabase
+    .from("ServiceCategory")
+    .select("id, allowsCustomPricing")
+    .eq("id", categoryId)
+    .eq("isActive", true)
+    .single();
+
   if (!cat) return { ok: false, error: "Category not found or inactive." };
   if (cat.allowsCustomPricing) {
     return { ok: false, error: "Custom-pricing categories do not use catalog items." };
   }
+
   const parsed = serviceItemFormSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
   const { name, defaultPrice, sortOrder, isActive } = parsed.data;
   try {
-    const row = await prisma.serviceItem.create({
-      data: {
+    const { data: row, error } = await supabase
+      .from("ServiceItem")
+      .insert({
         serviceCategoryId: categoryId,
         name,
-        defaultPrice: new Prisma.Decimal(String(defaultPrice)),
+        defaultPrice,
         sortOrder,
         isActive,
-      },
-      select: { id: true },
-    });
+      })
+      .select("id")
+      .single();
+
+    if (error) throw error;
+
     revalidatePath("/admin/services");
     revalidatePath(`/admin/services/${categoryId}/edit`);
     revalidatePath("/reception/orders/new");
@@ -158,27 +236,37 @@ export async function updateServiceItem(input: unknown): Promise<ActionResult> {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
   const { id, serviceCategoryId, name, defaultPrice, sortOrder, isActive } = parsed.data;
-  const cat = await prisma.serviceCategory.findFirst({
-    where: { id: serviceCategoryId, isActive: true },
-  });
+
+  const supabase = await createClient();
+  const { data: cat } = await supabase
+    .from("ServiceCategory")
+    .select("id, allowsCustomPricing")
+    .eq("id", serviceCategoryId)
+    .eq("isActive", true)
+    .single();
+
   if (!cat) return { ok: false, error: "Category not found or inactive." };
   if (cat.allowsCustomPricing) {
     return { ok: false, error: "Custom-pricing categories do not use catalog items." };
   }
-  const item = await prisma.serviceItem.findFirst({
-    where: { id, serviceCategoryId },
-  });
+
+  const { data: item } = await supabase
+    .from("ServiceItem")
+    .select("id")
+    .eq("id", id)
+    .eq("serviceCategoryId", serviceCategoryId)
+    .single();
+
   if (!item) return { ok: false, error: "Item not found." };
+
   try {
-    await prisma.serviceItem.update({
-      where: { id },
-      data: {
-        name,
-        defaultPrice: new Prisma.Decimal(String(defaultPrice)),
-        sortOrder,
-        isActive,
-      },
-    });
+    const { error } = await supabase
+      .from("ServiceItem")
+      .update({ name, defaultPrice, sortOrder, isActive })
+      .eq("id", id);
+
+    if (error) throw error;
+
     revalidatePath("/admin/services");
     revalidatePath(`/admin/services/${serviceCategoryId}/edit`);
     revalidatePath(`/admin/services/${serviceCategoryId}/items/${id}/edit`);
@@ -192,15 +280,25 @@ export async function updateServiceItem(input: unknown): Promise<ActionResult> {
 
 export async function deactivateServiceItem(itemId: string, categoryId: string): Promise<ActionResult> {
   if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
-  const item = await prisma.serviceItem.findFirst({
-    where: { id: itemId, serviceCategoryId: categoryId },
-  });
+
+  const supabase = await createClient();
+  const { data: item } = await supabase
+    .from("ServiceItem")
+    .select("id")
+    .eq("id", itemId)
+    .eq("serviceCategoryId", categoryId)
+    .single();
+
   if (!item) return { ok: false, error: "Item not found." };
+
   try {
-    await prisma.serviceItem.update({
-      where: { id: itemId },
-      data: { isActive: false },
-    });
+    const { error } = await supabase
+      .from("ServiceItem")
+      .update({ isActive: false })
+      .eq("id", itemId);
+
+    if (error) throw error;
+
     revalidatePath("/admin/services");
     revalidatePath(`/admin/services/${categoryId}/edit`);
     revalidatePath("/reception/orders/new");

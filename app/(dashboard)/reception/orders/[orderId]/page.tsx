@@ -7,6 +7,15 @@ import { OrderStatusActions } from "@/components/orders/order-status-actions";
 import { formatCurrency } from "@/lib/format";
 import { getOrderById } from "@/lib/actions/orders";
 
+interface OrderItemRow {
+  id: string;
+  categoryName: string;
+  itemName: string;
+  quantity: number;
+  unitPrice: { toNumber: () => number; toString: () => string };
+  lineTotal: { toNumber: () => number; toString: () => string };
+}
+
 const dateFmt = new Intl.DateTimeFormat("en-US", {
   dateStyle: "long",
   timeStyle: "short",
@@ -90,7 +99,7 @@ export default async function OrderDetailPage({ params }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-50">
-              {order.items.map((item) => (
+              {order.items.map((item: OrderItemRow) => (
                 <tr key={item.id}>
                   <td className="px-5 py-2.5 text-zinc-600">{item.categoryName}</td>
                   <td className="px-5 py-2.5 font-medium text-zinc-900">{item.itemName}</td>
@@ -109,7 +118,7 @@ export default async function OrderDetailPage({ params }: Props) {
 
         {/* Mobile */}
         <div className="divide-y divide-zinc-100 sm:hidden">
-          {order.items.map((item) => (
+          {order.items.map((item: OrderItemRow) => (
             <div key={item.id} className="px-4 py-3">
               <div className="flex items-start justify-between gap-2">
                 <div>

@@ -1,12 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { OrderStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { generateOrderNumber } from "@/lib/orders/order-number";
-import { prisma } from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 import { createOrderSchema } from "@/lib/validations/order";
+import { OrderStatus, PaymentStatus } from "@/lib/types/enums";
 
 export type CreateOrderResult =
   | { ok: true; orderId: string; orderNumber: string }
@@ -24,32 +25,41 @@ export async function getServiceCatalogForReception(): Promise<ServiceCatalogCat
   if (!session?.user || session.user.role !== "RECEPTION") {
     return [];
   }
-  const rows = await prisma.serviceCategory.findMany({
-    where: { isActive: true },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    include: {
-      items: {
-        where: { isActive: true },
-        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-        select: { id: true, name: true, defaultPrice: true },
-      },
-    },
+
+  const supabase = await createClient();
+  const { data: rows } = await supabase
+    .from("ServiceCategory")
+    .select("id, name, allowsCustomPricing, items:ServiceItem(id, name, defaultPrice, isActive, sortOrder)")
+    .eq("isActive", true)
+    .order("sortOrder", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (!rows) return [];
+
+  return rows.map((c: any) => {
+    const activeItems = (c.items || [])
+      .filter((i: any) => i.isActive)
+      .sort((a: any, b: any) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.name.localeCompare(b.name);
+      });
+
+    return {
+      id: c.id,
+      name: c.name,
+      allowsCustomPricing: c.allowsCustomPricing,
+      items: activeItems.map((i: any) => ({
+        id: i.id,
+        name: i.name,
+        defaultPrice: Number(i.defaultPrice),
+      })),
+    };
   });
-  return rows.map((c) => ({
-    id: c.id,
-    name: c.name,
-    allowsCustomPricing: c.allowsCustomPricing,
-    items: c.items.map((i) => ({
-      id: i.id,
-      name: i.name,
-      defaultPrice: i.defaultPrice.toNumber(),
-    })),
-  }));
 }
 
 export type OrderFilters = {
   q?: string;
-  orderStatus?: OrderStatus;
+  orderStatus?: string;
   from?: string; // YYYY-MM-DD
   to?: string;   // YYYY-MM-DD
 };
@@ -60,60 +70,57 @@ export async function getMyOrdersForReception(filters: OrderFilters = {}) {
     return [];
   }
 
-  const where: Prisma.OrderWhereInput = { createdById: session.user.id };
+  const supabase = await createClient();
+  let query = supabase
+    .from("Order")
+    .select(`
+      id,
+      orderNumber,
+      createdAt,
+      totalAmount,
+      paidAmount,
+      paymentStatus,
+      orderStatus,
+      notes,
+      customerName,
+      customerPhone,
+      items:OrderItem(count)
+    `)
+    .eq("createdById", session.user.id);
 
   if (filters.orderStatus) {
-    where.orderStatus = filters.orderStatus;
+    query = query.eq("orderStatus", filters.orderStatus);
   }
-
   if (filters.from) {
-    where.createdAt = { ...where.createdAt as object, gte: new Date(`${filters.from}T00:00:00.000`) };
+    query = query.gte("createdAt", `${filters.from}T00:00:00.000Z`);
   }
   if (filters.to) {
-    where.createdAt = { ...where.createdAt as object, lte: new Date(`${filters.to}T23:59:59.999`) };
+    query = query.lte("createdAt", `${filters.to}T23:59:59.999Z`);
   }
-
   if (filters.q) {
     const q = filters.q.trim();
     if (q) {
-      where.OR = [
-        { orderNumber: { contains: q, mode: "insensitive" } },
-        { notes: { contains: q, mode: "insensitive" } },
-        { customerName: { contains: q, mode: "insensitive" } },
-      ];
+      query = query.or(`orderNumber.ilike.%${q}%,notes.ilike.%${q}%,customerName.ilike.%${q}%`);
     }
   }
 
-  const orders = await prisma.order.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      orderNumber: true,
-      createdAt: true,
-      totalAmount: true,
-      paidAmount: true,
-      paymentStatus: true,
-      orderStatus: true,
-      notes: true,
-      customerName: true,
-      customerPhone: true,
-      _count: { select: { items: true } },
-    },
-  });
+  const { data: orders } = await query.order("createdAt", { ascending: false });
 
-  return orders.map((o) => ({
+  if (!orders) return [];
+
+  // Return shape matching original Prisma output
+  return orders.map((o: any) => ({
     id: o.id,
     orderNumber: o.orderNumber,
-    createdAt: o.createdAt,
-    totalAmount: o.totalAmount.toString(),
-    paidAmount: o.paidAmount.toString(),
-    paymentStatus: o.paymentStatus,
-    orderStatus: o.orderStatus,
+    createdAt: new Date(o.createdAt),
+    totalAmount: { toNumber: () => Number(o.totalAmount), toString: () => String(o.totalAmount) },
+    paidAmount: { toNumber: () => Number(o.paidAmount), toString: () => String(o.paidAmount) },
+    paymentStatus: o.paymentStatus as PaymentStatus,
+    orderStatus: o.orderStatus as OrderStatus,
     notes: o.notes,
     customerName: o.customerName,
     customerPhone: o.customerPhone,
-    _count: { items: o._count.items },
+    _count: { items: o.items[0]?.count || 0 },
   }));
 }
 
@@ -135,28 +142,22 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
 
   const { notes, customerName, customerPhone, items } = parsed.data;
 
+  const supabase = await createClient();
   const categoryIds = [...new Set(items.map((i) => i.serviceCategoryId))];
-  const categories = await prisma.serviceCategory.findMany({
-    where: { id: { in: categoryIds }, isActive: true },
-    select: { id: true, name: true, allowsCustomPricing: true },
-  });
-  const categoryMap = new Map(categories.map((c) => [c.id, c]));
-  if (categories.length !== categoryIds.length) {
+
+  const { data: categories } = await supabase
+    .from("ServiceCategory")
+    .select("id, name, allowsCustomPricing")
+    .in("id", categoryIds)
+    .eq("isActive", true);
+
+  if (!categories || categories.length !== categoryIds.length) {
     return { ok: false, error: "One or more categories are invalid or inactive." };
   }
+  const categoryMap = new Map(categories.map((c) => [c.id, c]));
 
-  const lines: {
-    serviceCategoryId: string;
-    categoryName: string;
-    serviceItemId: string | null;
-    itemName: string;
-    quantity: number;
-    unitPrice: Prisma.Decimal;
-    lineTotal: Prisma.Decimal;
-    sortOrder: number;
-  }[] = [];
-
-  let total = new Prisma.Decimal(0);
+  const lines: any[] = [];
+  let total = 0;
 
   for (let i = 0; i < items.length; i++) {
     const row = items[i];
@@ -166,9 +167,9 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
       if (!cat.allowsCustomPricing) {
         return { ok: false, error: `"${cat.name}" does not allow custom items.` };
       }
-      const unitPrice = new Prisma.Decimal(String(row.unitPrice));
-      const lineTotalI = unitPrice.mul(row.quantity);
-      total = total.add(lineTotalI);
+      const unitPrice = Number(row.unitPrice);
+      const lineTotal = unitPrice * row.quantity;
+      total += lineTotal;
       lines.push({
         serviceCategoryId: cat.id,
         categoryName: cat.name,
@@ -176,7 +177,7 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
         itemName: row.customItemName.trim(),
         quantity: row.quantity,
         unitPrice,
-        lineTotal: lineTotalI,
+        lineTotal,
         sortOrder: i,
       });
       continue;
@@ -189,21 +190,21 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
       };
     }
 
-    const item = await prisma.serviceItem.findFirst({
-      where: {
-        id: row.serviceItemId,
-        serviceCategoryId: cat.id,
-        isActive: true,
-      },
-      select: { id: true, name: true, defaultPrice: true },
-    });
+    const { data: item } = await supabase
+      .from("ServiceItem")
+      .select("id, name, defaultPrice")
+      .eq("id", row.serviceItemId)
+      .eq("serviceCategoryId", cat.id)
+      .eq("isActive", true)
+      .single();
+
     if (!item) {
       return { ok: false, error: "One or more items are invalid or inactive." };
     }
 
-    const unitPrice = item.defaultPrice;
-    const lineTotalI = unitPrice.mul(row.quantity);
-    total = total.add(lineTotalI);
+    const unitPrice = Number(item.defaultPrice);
+    const lineTotal = unitPrice * row.quantity;
+    total += lineTotal;
     lines.push({
       serviceCategoryId: cat.id,
       categoryName: cat.name,
@@ -211,54 +212,52 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
       itemName: item.name,
       quantity: row.quantity,
       unitPrice,
-      lineTotal: lineTotalI,
+      lineTotal,
       sortOrder: i,
     });
   }
 
+  // Retry loop for order number collisions (same as original)
   const maxAttempts = 8;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const created = await prisma.$transaction(async (tx) => {
-        const orderNumber = await generateOrderNumber(tx);
+      const orderNumber = await generateOrderNumber();
 
-        // Use proper Prisma create with nested OrderItem creation.
-        // Prisma handles ID generation via @default(cuid()) in the schema.
-        const order = await tx.order.create({
-          data: {
-            orderNumber,
-            createdById: session.user!.id,
-            notes: notes?.trim() || null,
-            totalAmount: total,
-            orderStatus: "IN_PROGRESS",
-            customerName,
-            customerPhone,
-            items: {
-              create: lines.map((l) => ({
-                serviceCategoryId: l.serviceCategoryId,
-                categoryName: l.categoryName,
-                serviceItemId: l.serviceItemId,
-                itemName: l.itemName,
-                quantity: l.quantity,
-                unitPrice: l.unitPrice,
-                lineTotal: l.lineTotal,
-                sortOrder: l.sortOrder,
-              })),
-            },
-          },
-          select: { id: true, orderNumber: true },
-        });
+      const { data: order, error: orderError } = await supabase
+        .from("Order")
+        .insert({
+          orderNumber,
+          createdById: session.user.id,
+          notes: notes?.trim() || null,
+          totalAmount: total,
+          orderStatus: OrderStatus.IN_PROGRESS,
+          paymentStatus: PaymentStatus.UNPAID,
+          customerName,
+          customerPhone,
+        })
+        .select("id, orderNumber")
+        .single();
 
-        return order;
-      });
+      if (orderError) throw orderError;
+
+      // Insert items
+      const linesToInsert = lines.map(l => ({ ...l, orderId: order.id }));
+      const { error: itemsError } = await supabase
+        .from("OrderItem")
+        .insert(linesToInsert);
+
+      if (itemsError) {
+        // Rollback: delete the order if items failed
+        await supabase.from("Order").delete().eq("id", order.id);
+        throw itemsError;
+      }
 
       revalidatePath("/reception/orders");
       revalidatePath("/admin");
-      return { ok: true, orderId: created.id, orderNumber: created.orderNumber };
-    } catch (e: unknown) {
-      const err = e as { code?: string; meta?: { target?: string[] } };
-      const isOrderNumberCollision =
-        err.code === "P2002" && err.meta?.target?.includes("orderNumber");
+      return { ok: true, orderId: order.id, orderNumber: order.orderNumber };
+
+    } catch (e: any) {
+      const isOrderNumberCollision = e.code === "23505" && e.message?.includes("orderNumber");
       if (isOrderNumberCollision && attempt < maxAttempts - 1) continue;
       console.error(e);
       return { ok: false, error: "Could not save the order. Please try again." };
@@ -290,10 +289,12 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
 
   const { orderId, nextStatus } = parsed.data;
 
-  const existing = await prisma.order.findUnique({
-    where: { id: orderId },
-    select: { id: true, createdById: true, orderStatus: true },
-  });
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("Order")
+    .select("id, createdById, orderStatus")
+    .eq("id", orderId)
+    .single();
 
   if (!existing || existing.createdById !== session.user.id) {
     return { ok: false, error: "Order not found." };
@@ -301,18 +302,21 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
 
   const current = existing.orderStatus;
   const allowed =
-    (current === "IN_PROGRESS" && nextStatus === "READY") ||
-    (current === "READY" && nextStatus === "PICKED_UP");
+    (current === OrderStatus.IN_PROGRESS && nextStatus === OrderStatus.READY) ||
+    (current === OrderStatus.READY && nextStatus === OrderStatus.PICKED_UP);
 
   if (!allowed) {
     return { ok: false, error: "Invalid status transition." };
   }
 
   try {
-    await prisma.order.update({
-      where: { id: orderId },
-      data: { orderStatus: nextStatus },
-    });
+    const { error } = await supabase
+      .from("Order")
+      .update({ orderStatus: nextStatus })
+      .eq("id", orderId);
+
+    if (error) throw error;
+
     revalidatePath("/reception/orders");
     return { ok: true };
   } catch (e) {
@@ -345,30 +349,38 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
 
   const { orderId, amount } = parsed.data;
 
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    select: { id: true, createdById: true, totalAmount: true, paidAmount: true },
-  });
+  const supabase = await createClient();
+  const { data: order } = await supabase
+    .from("Order")
+    .select("id, createdById, totalAmount, paidAmount")
+    .eq("id", orderId)
+    .single();
 
   if (!order || order.createdById !== session.user.id) {
     return { ok: false, error: "Order not found." };
   }
 
-  const remaining = order.totalAmount.sub(order.paidAmount).toNumber();
+  const totalAmount = Number(order.totalAmount);
+  const paidAmount = Number(order.paidAmount);
+
+  const remaining = totalAmount - paidAmount;
   if (amount > remaining + 0.001) {
     return { ok: false, error: `Amount exceeds remaining balance ($${remaining.toFixed(2)}).` };
   }
 
-  const newPaid = order.paidAmount.add(new Prisma.Decimal(String(amount)));
-  const paymentStatus = newPaid.gte(order.totalAmount) ? "PAID"
-    : newPaid.gt(0) ? "PARTIALLY_PAID"
-    : "UNPAID";
+  const newPaid = paidAmount + amount;
+  const paymentStatus = newPaid >= totalAmount ? PaymentStatus.PAID
+    : newPaid > 0 ? PaymentStatus.PARTIALLY_PAID
+    : PaymentStatus.UNPAID;
 
   try {
-    await prisma.order.update({
-      where: { id: orderId },
-      data: { paidAmount: newPaid, paymentStatus },
-    });
+    const { error } = await supabase
+      .from("Order")
+      .update({ paidAmount: newPaid, paymentStatus })
+      .eq("id", orderId);
+
+    if (error) throw error;
+
     revalidatePath("/reception/orders");
     revalidatePath(`/reception/orders/${orderId}`);
     return { ok: true };
@@ -384,23 +396,40 @@ export async function getOrderById(orderId: string) {
   const session = await auth();
   if (!session?.user?.id) return null;
 
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: {
-      items: {
-        orderBy: { sortOrder: "asc" },
-        include: { serviceCategory: { select: { name: true } } },
-      },
-      createdBy: { select: { name: true, email: true } },
-    },
-  });
+  const supabase = await createClient();
+  const { data: order } = await supabase
+    .from("Order")
+    .select(`
+      *,
+      items:OrderItem(*, serviceCategory:ServiceCategory(name)),
+      createdBy:users(name, email)
+    `)
+    .eq("id", orderId)
+    .single();
 
   if (!order) return null;
+
+  // Sort items by sortOrder (to match Prisma's orderBy)
+  if (order.items) {
+    order.items.sort((a: any, b: any) => a.sortOrder - b.sortOrder);
+  }
 
   // Reception can only view their own orders
   if (session.user.role === "RECEPTION" && order.createdById !== session.user.id) {
     return null;
   }
 
-  return order;
+  // Return Prisma-compatible shape with Decimal-like objects
+  return {
+    ...order,
+    totalAmount: { toNumber: () => Number(order.totalAmount), toString: () => String(order.totalAmount) },
+    paidAmount: { toNumber: () => Number(order.paidAmount), toString: () => String(order.paidAmount) },
+    createdAt: new Date(order.createdAt),
+    createdBy: Array.isArray(order.createdBy) ? order.createdBy[0] : order.createdBy,
+    items: order.items.map((i: any) => ({
+      ...i,
+      unitPrice: { toNumber: () => Number(i.unitPrice), toString: () => String(i.unitPrice) },
+      lineTotal: { toNumber: () => Number(i.lineTotal), toString: () => String(i.lineTotal) },
+    })),
+  };
 }

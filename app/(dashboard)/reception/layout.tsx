@@ -1,13 +1,12 @@
 import { ReceptionHeader } from "@/components/reception/reception-header";
-import { requireRole } from "@/lib/auth/server";
-import { Role } from "@prisma/client";
+import { requireRole } from "@/lib/auth";
 
 export default async function ReceptionLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await requireRole(Role.RECEPTION);
+  await requireRole(["RECEPTION"]);
 
   return (
     <div className="min-h-screen bg-zinc-50">

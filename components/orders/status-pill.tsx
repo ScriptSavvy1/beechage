@@ -1,4 +1,4 @@
-import type { OrderStatus } from "@prisma/client";
+import type { OrderStatus } from "@/lib/types/enums";
 
 const orderStyles: Record<OrderStatus, string> = {
   IN_PROGRESS: "bg-amber-50 text-amber-900 ring-amber-200",

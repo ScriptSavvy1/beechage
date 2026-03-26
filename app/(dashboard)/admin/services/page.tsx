@@ -2,6 +2,14 @@ import Link from "next/link";
 import { getServiceCategoriesForAdmin } from "@/lib/actions/service-catalog";
 import { formatCurrency } from "@/lib/format";
 
+interface ServiceItem {
+  id: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  defaultPrice: { toNumber: () => number; toString: () => string };
+}
+
 export default async function AdminServicesPage() {
   const categories = await getServiceCategoriesForAdmin();
 
@@ -48,7 +56,7 @@ export default async function AdminServicesPage() {
                   </div>
                   <p className="mt-1 text-xs text-zinc-500">
                     Sort {c.sortOrder}
-                    {c.allowsCustomPricing ? " · No catalog items at reception" : ` · ${c.items.filter((i) => i.isActive).length} active items`}
+                    {c.allowsCustomPricing ? " · No catalog items at reception" : ` · ${c.items.filter((i: ServiceItem) => i.isActive).length} active items`}
                   </p>
                 </div>
                 <Link
@@ -71,7 +79,7 @@ export default async function AdminServicesPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-50">
-                      {c.items.map((item) => (
+                      {c.items.map((item: ServiceItem) => (
                         <tr key={item.id} className={item.isActive ? "" : "text-zinc-400"}>
                           <td className="py-2 pr-4 font-medium text-zinc-900">{item.name}</td>
                           <td className="py-2 pr-4 tabular-nums">{formatCurrency(item.defaultPrice)}</td>

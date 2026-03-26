@@ -1,6 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 
 type RouteParams = {
   params: Promise<{ orderId: string }>;
@@ -13,16 +14,24 @@ export async function GET(_req: Request, { params }: RouteParams) {
   }
 
   const { orderId } = await params;
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: {
-      items: { orderBy: { sortOrder: "asc" } },
-      createdBy: { select: { name: true, email: true } },
-    },
-  });
+  const supabase = await createClient();
+  const { data: order } = await supabase
+    .from("Order")
+    .select(`
+      *,
+      items:OrderItem(*),
+      createdBy:users(name, email)
+    `)
+    .eq("id", orderId)
+    .single();
 
   if (!order) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Sort items by sortOrder
+  if (order.items) {
+    order.items.sort((a: any, b: any) => a.sortOrder - b.sortOrder);
   }
 
   // Reception can only see own orders
@@ -30,21 +39,22 @@ export async function GET(_req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const totalAmount = order.totalAmount.toNumber();
-  const paidAmount = order.paidAmount.toNumber();
+  const createdBy = Array.isArray(order.createdBy) ? order.createdBy[0] : order.createdBy;
+  const totalAmount = Number(order.totalAmount);
+  const paidAmount = Number(order.paidAmount);
   const remaining = totalAmount - paidAmount;
   const dateFmt = new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeStyle: "short" });
   const fmt = (n: number) => `$${n.toFixed(2)}`;
 
   const itemRows = order.items
     .map(
-      (item) => `
+      (item: any) => `
       <tr>
         <td>${item.categoryName}</td>
         <td>${item.itemName}</td>
         <td style="text-align:center">${item.quantity}</td>
-        <td style="text-align:right">${fmt(item.unitPrice.toNumber())}</td>
-        <td style="text-align:right">${fmt(item.lineTotal.toNumber())}</td>
+        <td style="text-align:right">${fmt(Number(item.unitPrice))}</td>
+        <td style="text-align:right">${fmt(Number(item.lineTotal))}</td>
       </tr>`
     )
     .join("");
@@ -111,7 +121,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
   <h1>Receipt</h1>
   <p class="meta">
     Order <strong>${order.orderNumber}</strong> &bull;
-    ${dateFmt.format(order.createdAt)}
+    ${dateFmt.format(new Date(order.createdAt))}
   </p>
 
   <div class="section">
@@ -158,7 +168,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
   </div>
 
   <div class="footer">
-    <p>Served by ${order.createdBy.name || order.createdBy.email}</p>
+    <p>Served by ${createdBy?.name || createdBy?.email || "Staff"}</p>
     <p>Thank you for choosing our service!</p>
   </div>
 </body>

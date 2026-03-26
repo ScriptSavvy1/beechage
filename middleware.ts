@@ -1,29 +1,22 @@
-import { getToken } from "next-auth/jwt";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { updateSession } from "@/lib/supabase/middleware";
 
 /**
- * Role checks use JWT only — no Prisma/bcrypt in Edge.
- * Keep logic aligned with `lib/auth/server.ts` for server components.
+ * Middleware — exact same routing logic as the old NextAuth version,
+ * but using Supabase auth instead of JWT tokens.
  */
 export async function middleware(req: NextRequest) {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret) {
-    console.error("AUTH_SECRET is not set");
-  }
-
-  const token = await getToken({
-    req,
-    secret,
-  });
+  const { user, supabaseResponse } = await updateSession(req);
 
   const { pathname } = req.nextUrl;
-  const isLoggedIn = !!token;
-  const role = token?.role as string | undefined;
+  const isLoggedIn = !!user;
+  const role = user?.user_metadata?.role as string | undefined;
 
+  // Let API auth routes pass through
   const isApiAuth = pathname.startsWith("/api/auth");
   if (isApiAuth) {
-    return NextResponse.next();
+    return supabaseResponse;
   }
 
   const isLogin = pathname === "/login";
@@ -33,7 +26,7 @@ export async function middleware(req: NextRequest) {
       const home = role === "ADMIN" ? "/admin" : "/reception";
       return NextResponse.redirect(new URL(home, req.url));
     }
-    return NextResponse.next();
+    return supabaseResponse;
   }
 
   if (!isLoggedIn) {
@@ -55,7 +48,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL("/admin", req.url));
   }
 
-  return NextResponse.next();
+  return supabaseResponse;
 }
 
 export const config = {
