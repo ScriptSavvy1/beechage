@@ -53,17 +53,22 @@ export function LoginForm() {
 
   const onSubmit = async (data: FormValues) => {
     setFormError(null);
-    const result = await signIn("credentials", {
-      email: data.email,
-      password: data.password,
-      redirect: false,
-    });
-    if (result?.error) {
-      setFormError("Invalid email or password.");
-      return;
+    try {
+      const result = await signIn("credentials", {
+        email: data.email,
+        password: data.password,
+        redirect: false,
+      });
+      if (result?.error) {
+        setFormError("Invalid email or password.");
+        return;
+      }
+      // Full page navigation ensures the middleware picks up the new
+      // session cookie and routes to the correct role-based dashboard.
+      window.location.href = callbackUrl;
+    } catch {
+      setFormError("Something went wrong. Please try again.");
     }
-    router.replace(callbackUrl);
-    router.refresh();
   };
 
   return (
