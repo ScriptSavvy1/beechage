@@ -1,34 +1,41 @@
-import NextAuth from "next-auth";
-import authConfig from "@/auth.config";
+import { getToken } from "next-auth/jwt";
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 /**
- * Middleware using NextAuth v5's built-in auth() helper.
+ * Role checks use JWT only — no Prisma/bcrypt in Edge.
  *
- * IMPORTANT: We import from auth.config.ts (NOT lib/auth.ts) to avoid
- * bundling Prisma/bcrypt into the Edge middleware runtime.
- *
- * Why this fixes the Vercel login issue:
- *   The previous middleware used getToken() from "next-auth/jwt" which
- *   uses a different cookie name/salt than the auth handler on HTTPS.
- *   After a successful sign-in, the cookie was set but getToken() couldn't
- *   read it, so the middleware always thought the user was logged out.
- *   Using NextAuth().auth as middleware ensures the same cookie/JWT config.
+ * IMPORTANT: We explicitly set the cookie name to match what NextAuth v5
+ * uses. On HTTPS (Vercel), NextAuth v5 sets the cookie as
+ * "__Secure-authjs.session-token", but getToken() may default to the
+ * v4 cookie name "next-auth.session-token". This mismatch is why login
+ * appeared to succeed but the middleware couldn't read the session.
  */
-const { auth } = NextAuth(authConfig);
+export async function middleware(req: NextRequest) {
+  const secret = process.env.AUTH_SECRET;
+  const isSecure = req.url.startsWith("https://");
 
-export default auth((req) => {
+  const token = await getToken({
+    req,
+    secret,
+    // NextAuth v5 cookie name — different on HTTP vs HTTPS
+    cookieName: isSecure
+      ? "__Secure-authjs.session-token"
+      : "authjs.session-token",
+  });
+
   const { pathname } = req.nextUrl;
-  const isLoggedIn = !!req.auth;
-  const role = req.auth?.user?.role as string | undefined;
+  const isLoggedIn = !!token;
+  const role = token?.role as string | undefined;
 
-  // Let /api/auth routes pass through
-  if (pathname.startsWith("/api/auth")) {
+  const isApiAuth = pathname.startsWith("/api/auth");
+  if (isApiAuth) {
     return NextResponse.next();
   }
 
-  // Login page
-  if (pathname === "/login") {
+  const isLogin = pathname === "/login";
+
+  if (isLogin) {
     if (isLoggedIn) {
       const home = role === "ADMIN" ? "/admin" : "/reception";
       return NextResponse.redirect(new URL(home, req.url));
@@ -36,29 +43,27 @@ export default auth((req) => {
     return NextResponse.next();
   }
 
-  // Not logged in → redirect to login
   if (!isLoggedIn) {
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  // Root → redirect to role-based home
   if (pathname === "/") {
     const home = role === "ADMIN" ? "/admin" : "/reception";
     return NextResponse.redirect(new URL(home, req.url));
   }
 
-  // Role-based access control
   if (pathname.startsWith("/admin") && role !== "ADMIN") {
     return NextResponse.redirect(new URL("/reception", req.url));
   }
+
   if (pathname.startsWith("/reception") && role !== "RECEPTION") {
     return NextResponse.redirect(new URL("/admin", req.url));
   }
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: ["/", "/login", "/admin", "/admin/:path*", "/reception", "/reception/:path*"],
