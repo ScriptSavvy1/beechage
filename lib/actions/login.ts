@@ -19,20 +19,27 @@ export async function loginAction(
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
+  console.log("[LOGIN] loginAction called, email:", email);
+
   if (!email || !password) {
+    console.log("[LOGIN] missing email or password");
     return { ok: false, error: "Email and password are required." };
   }
 
   try {
+    console.log("[LOGIN] calling signIn()...");
     await signIn("credentials", {
       email,
       password,
       redirectTo: "/",
     });
     // signIn throws a NEXT_REDIRECT on success, so we never reach here.
+    console.log("[LOGIN] signIn returned (unexpected)");
     return { ok: true };
   } catch (error) {
+    console.log("[LOGIN] caught error:", (error as Error)?.constructor?.name, (error as Error)?.message?.substring(0, 200));
     if (error instanceof AuthError) {
+      console.log("[LOGIN] AuthError type:", error.type);
       switch (error.type) {
         case "CredentialsSignin":
           return { ok: false, error: "Invalid email or password." };
