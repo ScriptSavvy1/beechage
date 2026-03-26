@@ -1,3 +1,49 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ─── Design Tokens ─────────────────────────────────── */
+:root {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+/* ─── Base ───────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
+  min-height: 100dvh;
+}
+
+/* ─── Better Focus Rings ──────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ─── Selection ───────────────────────────────────────── */
+::selection {
+  background-color: #dbeafe;
+  color: #1e3a5f;
+}
+
+/* ─── Smooth Transitions on Interactive Elements ──────── */
+button, a, input, select, textarea {
+  transition: all 0.15s ease;
+}
+
+/* ─── Touch-friendly minimum size on mobile ──────────── */
+@media (pointer: coarse) {
+  button, a, select {
+    min-height: 44px;
+  }
+  input, textarea {
+    min-height: 44px;
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+}

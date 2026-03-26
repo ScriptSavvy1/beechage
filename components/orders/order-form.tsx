@@ -96,10 +96,10 @@ export function OrderForm({ catalog }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
-      <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
-        <div className="space-y-6">
-          <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 pb-32 sm:space-y-8 lg:pb-0">
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px] lg:gap-8">
+        <div className="space-y-4 sm:space-y-6">
+          <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-6">
             <h2 className="text-lg font-semibold text-zinc-900">Order details</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-1">
@@ -107,7 +107,7 @@ export function OrderForm({ catalog }: Props) {
                 <input
                   type="text"
                   placeholder="Customer full name"
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
                   {...register("customerName")}
                 />
                 {errors.customerName && (
@@ -119,7 +119,7 @@ export function OrderForm({ catalog }: Props) {
                 <input
                   type="tel"
                   placeholder="e.g. +1 555 123 4567"
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
                   {...register("customerPhone")}
                 />
                 {errors.customerPhone && (
@@ -132,14 +132,14 @@ export function OrderForm({ catalog }: Props) {
               <textarea
                 rows={3}
                 placeholder="Pickup instructions, stains, fabric care…"
-                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
                 {...register("notes")}
               />
               {errors.notes && <p className="mt-1 text-sm text-red-600">{errors.notes.message}</p>}
             </div>
           </section>
 
-          <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-lg font-semibold text-zinc-900">Line items</h2>
               <button
@@ -155,7 +155,7 @@ export function OrderForm({ catalog }: Props) {
               <p className="mt-2 text-sm text-red-600">{errors.items.message}</p>
             )}
 
-            <div className="mt-4 overflow-x-auto">
+            <div className="mt-4 -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
               <table className="w-full min-w-[760px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-zinc-200 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -187,12 +187,13 @@ export function OrderForm({ catalog }: Props) {
           </section>
         </div>
 
-        <aside className="h-fit lg:sticky lg:top-6">
+        {/* Desktop sidebar */}
+        <aside className="hidden h-fit lg:sticky lg:top-20 lg:block">
           <div className="rounded-2xl border border-zinc-200 bg-zinc-900 p-6 text-white shadow-lg">
             <p className="text-sm font-medium text-zinc-300">Order total</p>
             <p className="mt-2 text-3xl font-semibold tracking-tight">{formatCurrency(grandTotal)}</p>
             <p className="mt-2 text-xs text-zinc-400">
-              Totals are recalculated on the server when you save (catalog prices from the database).
+              Totals are recalculated on the server when you save.
             </p>
             {error && (
               <p className="mt-4 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-100">{error}</p>
@@ -206,6 +207,24 @@ export function OrderForm({ catalog }: Props) {
             </button>
           </div>
         </aside>
+      </div>
+
+      {/* Mobile sticky bottom bar */}
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 bg-zinc-900 px-4 py-3 lg:hidden">
+        <div className="mx-auto flex max-w-lg items-center justify-between gap-4">
+          <div className="text-white">
+            <p className="text-xs text-zinc-400">Total</p>
+            <p className="text-xl font-semibold tracking-tight">{formatCurrency(grandTotal)}</p>
+          </div>
+          {error && <p className="text-xs text-red-300">{error}</p>}
+          <button
+            type="submit"
+            disabled={isPending || catalog.length === 0}
+            className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-zinc-900 shadow transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isPending ? "Saving…" : "Save order"}
+          </button>
+        </div>
       </div>
     </form>
   );
