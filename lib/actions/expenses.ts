@@ -239,3 +239,53 @@ export async function deleteExpense(id: string): Promise<ExpenseActionResult> {
     return { ok: false, error: "Could not delete expense. Try again." };
   }
 }
+
+export async function createExpenseCategory(input: { name: string; sortOrder?: number }): Promise<ExpenseActionResult<{ id: string }>> {
+  if (!(await requireAdminUserId())) return { ok: false, error: "Unauthorized." };
+
+  const name = input.name?.trim();
+  if (!name) return { ok: false, error: "Name is required." };
+
+  const supabase = await createClient();
+  try {
+    const { data, error } = await supabase
+      .from("ExpenseCategory")
+      .insert({ name, sortOrder: input.sortOrder ?? 0, isActive: true })
+      .select("id")
+      .single();
+
+    if (error) throw error;
+
+    revalidatePath("/admin/expenses");
+    return { ok: true, data: { id: data.id } };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not create category (name may already exist)." };
+  }
+}
+
+export async function deleteExpenseCategory(id: string): Promise<ExpenseActionResult> {
+  if (!(await requireAdminUserId())) return { ok: false, error: "Unauthorized." };
+  const supabase = await createClient();
+
+  // Check for linked expenses
+  const { count } = await supabase
+    .from("Expense")
+    .select("id", { count: "exact", head: true })
+    .eq("expenseCategoryId", id);
+
+  if (count && count > 0) {
+    return { ok: false, error: `Cannot delete: ${count} expense(s) use this category.` };
+  }
+
+  try {
+    const { error } = await supabase.from("ExpenseCategory").delete().eq("id", id);
+    if (error) throw error;
+
+    revalidatePath("/admin/expenses");
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not delete category." };
+  }
+}

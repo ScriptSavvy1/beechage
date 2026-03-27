@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ServiceCategoryForm } from "@/components/admin/service-category-form";
 import { DeactivateCategoryButton } from "@/components/admin/deactivate-category-button";
-import { getServiceCategoryById } from "@/lib/actions/service-catalog";
+import { DeleteButton } from "@/components/admin/delete-button";
+import { getServiceCategoryById, deleteServiceCategory } from "@/lib/actions/service-catalog";
 import { formatCurrency } from "@/lib/format";
 
 interface CatalogItem {
@@ -26,7 +27,16 @@ export default async function EditServiceCategoryPage({ params }: Props) {
       </Link>
       <div className="mt-4 flex flex-wrap items-end justify-between gap-4">
         <h1 className="text-2xl font-semibold text-zinc-900">Edit: {category.name}</h1>
-        <DeactivateCategoryButton categoryId={category.id} />
+        <div className="flex gap-4">
+          <DeactivateCategoryButton categoryId={category.id} />
+          <DeleteButton
+            label="Delete category"
+            confirmText="Permanently delete this category and all its items?"
+            action={deleteServiceCategory}
+            args={[category.id]}
+            redirectTo="/admin/services"
+          />
+        </div>
       </div>
 
       <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_320px]">

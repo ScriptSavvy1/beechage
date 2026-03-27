@@ -308,3 +308,60 @@ export async function deactivateServiceItem(itemId: string, categoryId: string):
     return { ok: false, error: "Could not deactivate item." };
   }
 }
+
+export async function deleteServiceCategory(id: string): Promise<ActionResult> {
+  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const supabase = await createClient();
+
+  // Check if any order items reference this category
+  const { count } = await supabase
+    .from("OrderItem")
+    .select("id", { count: "exact", head: true })
+    .eq("serviceCategoryId", id);
+
+  if (count && count > 0) {
+    return { ok: false, error: `Cannot delete: ${count} order item(s) reference this category. Deactivate instead.` };
+  }
+
+  try {
+    // Delete items first (cascade should handle, but be explicit)
+    await supabase.from("ServiceItem").delete().eq("serviceCategoryId", id);
+    const { error } = await supabase.from("ServiceCategory").delete().eq("id", id);
+    if (error) throw error;
+
+    revalidatePath("/admin/services");
+    revalidatePath("/reception/orders/new");
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not delete category." };
+  }
+}
+
+export async function deleteServiceItem(itemId: string, categoryId: string): Promise<ActionResult> {
+  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const supabase = await createClient();
+
+  // Check if any order items reference this item
+  const { count } = await supabase
+    .from("OrderItem")
+    .select("id", { count: "exact", head: true })
+    .eq("serviceItemId", itemId);
+
+  if (count && count > 0) {
+    return { ok: false, error: `Cannot delete: ${count} order(s) reference this item. Deactivate instead.` };
+  }
+
+  try {
+    const { error } = await supabase.from("ServiceItem").delete().eq("id", itemId);
+    if (error) throw error;
+
+    revalidatePath("/admin/services");
+    revalidatePath(`/admin/services/${categoryId}/edit`);
+    revalidatePath("/reception/orders/new");
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not delete item." };
+  }
+}

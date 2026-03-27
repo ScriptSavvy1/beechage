@@ -9,7 +9,7 @@ const nav = [
   { href: "/admin", label: "Dashboard", exact: true },
   { href: "/admin/services", label: "Services" },
   { href: "/admin/expenses", label: "Expenses" },
-  { href: "/admin/users/new", label: "New user" },
+  { href: "/admin/users", label: "Users" },
 ];
 
 export function AdminHeader() {
