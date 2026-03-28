@@ -40,7 +40,7 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
 
-  const { email, name, password } = parsed.data;
+  const { email, name, password, role } = parsed.data;
 
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return { ok: false, error: "System missing SUPABASE_SERVICE_ROLE_KEY configuration." };
@@ -56,7 +56,7 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
       email_confirm: true,
       user_metadata: {
         name: name?.trim() || null,
-        role: Role.RECEPTION,
+        role: role || Role.RECEPTION,
       }
     });
 

@@ -3,8 +3,7 @@ import { NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
 /**
- * Middleware — exact same routing logic as the old NextAuth version,
- * but using Supabase auth instead of JWT tokens.
+ * Middleware — routing guards for ADMIN, RECEPTION, and LAUNDRY roles.
  */
 export async function middleware(req: NextRequest) {
   const { user, supabaseResponse } = await updateSession(req);
@@ -23,7 +22,7 @@ export async function middleware(req: NextRequest) {
 
   if (isLogin) {
     if (isLoggedIn) {
-      const home = role === "ADMIN" ? "/admin" : "/reception";
+      const home = role === "ADMIN" ? "/admin" : role === "LAUNDRY" ? "/laundry" : "/reception";
       return NextResponse.redirect(new URL(home, req.url));
     }
     return supabaseResponse;
@@ -36,21 +35,28 @@ export async function middleware(req: NextRequest) {
   }
 
   if (pathname === "/") {
-    const home = role === "ADMIN" ? "/admin" : "/reception";
+    const home = role === "ADMIN" ? "/admin" : role === "LAUNDRY" ? "/laundry" : "/reception";
     return NextResponse.redirect(new URL(home, req.url));
   }
 
   if (pathname.startsWith("/admin") && role !== "ADMIN") {
-    return NextResponse.redirect(new URL("/reception", req.url));
+    const home = role === "LAUNDRY" ? "/laundry" : "/reception";
+    return NextResponse.redirect(new URL(home, req.url));
   }
 
   if (pathname.startsWith("/reception") && role !== "RECEPTION") {
-    return NextResponse.redirect(new URL("/admin", req.url));
+    const home = role === "ADMIN" ? "/admin" : "/laundry";
+    return NextResponse.redirect(new URL(home, req.url));
+  }
+
+  if (pathname.startsWith("/laundry") && role !== "LAUNDRY") {
+    const home = role === "ADMIN" ? "/admin" : "/reception";
+    return NextResponse.redirect(new URL(home, req.url));
   }
 
   return supabaseResponse;
 }
 
 export const config = {
-  matcher: ["/", "/login", "/admin", "/admin/:path*", "/reception", "/reception/:path*"],
+  matcher: ["/", "/login", "/admin", "/admin/:path*", "/reception", "/reception/:path*", "/laundry", "/laundry/:path*"],
 };

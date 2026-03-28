@@ -1,6 +1,7 @@
 export enum Role {
   ADMIN = "ADMIN",
   RECEPTION = "RECEPTION",
+  LAUNDRY = "LAUNDRY",
 }
 
 export enum OrderStatus {

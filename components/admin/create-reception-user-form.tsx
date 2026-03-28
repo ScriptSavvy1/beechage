@@ -21,7 +21,7 @@ export function CreateReceptionUserForm() {
     formState: { errors },
   } = useForm<CreateReceptionUserInput>({
     resolver: zodResolver(createReceptionUserSchema),
-    defaultValues: { email: "", name: "", password: "" },
+    defaultValues: { email: "", name: "", password: "", role: "RECEPTION" },
   });
 
   const onSubmit = (data: CreateReceptionUserInput) => {
@@ -29,7 +29,7 @@ export function CreateReceptionUserForm() {
     startTransition(async () => {
       const result = await createReceptionUser(data);
       if (result.ok) {
-        router.push("/admin");
+        router.push("/admin/users");
         router.refresh();
         return;
       }
@@ -42,8 +42,8 @@ export function CreateReceptionUserForm() {
       {serverError ? <AlertBanner tone="error">{serverError}</AlertBanner> : null}
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-zinc-900">New reception user</h2>
-        <p className="mt-1 text-sm text-zinc-600">They can sign in and create orders only.</p>
+        <h2 className="text-lg font-semibold text-zinc-900">New user</h2>
+        <p className="mt-1 text-sm text-zinc-600">Create a reception or laundry staff account.</p>
 
         <div className="mt-6 space-y-5">
           <FormField label="Email" htmlFor="email" error={errors.email?.message} required>
@@ -56,6 +56,13 @@ export function CreateReceptionUserForm() {
 
           <FormField label="Temporary password" htmlFor="password" error={errors.password?.message} required>
             <input id="password" type="password" autoComplete="new-password" className={formInputClassName} disabled={isPending} {...register("password")} />
+          </FormField>
+
+          <FormField label="Role" htmlFor="role" error={errors.role?.message} required>
+            <select id="role" className={formInputClassName} disabled={isPending} {...register("role")}>
+              <option value="RECEPTION">Reception</option>
+              <option value="LAUNDRY">Laundry</option>
+            </select>
           </FormField>
         </div>
 
@@ -70,7 +77,7 @@ export function CreateReceptionUserForm() {
           <button
             type="button"
             disabled={isPending}
-            onClick={() => router.push("/admin")}
+            onClick={() => router.push("/admin/users")}
             className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-60"
           >
             Cancel

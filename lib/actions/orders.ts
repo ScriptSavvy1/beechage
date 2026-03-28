@@ -300,10 +300,9 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
     return { ok: false, error: "Order not found." };
   }
 
-  const current = existing.orderStatus;
-  const allowed =
-    (current === OrderStatus.IN_PROGRESS && nextStatus === OrderStatus.READY) ||
-    (current === OrderStatus.READY && nextStatus === OrderStatus.PICKED_UP);
+  // Reception can only mark READY → PICKED_UP
+  // (Laundry handles IN_PROGRESS → READY)
+  const allowed = existing.orderStatus === OrderStatus.READY && nextStatus === OrderStatus.PICKED_UP;
 
   if (!allowed) {
     return { ok: false, error: "Invalid status transition." };
@@ -318,6 +317,7 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
     if (error) throw error;
 
     revalidatePath("/reception/orders");
+    revalidatePath("/laundry/orders");
     return { ok: true };
   } catch (e) {
     console.error(e);
@@ -432,4 +432,150 @@ export async function getOrderById(orderId: string) {
       lineTotal: { toNumber: () => Number(i.lineTotal), toString: () => String(i.lineTotal) },
     })),
   };
+}
+
+// ─── Laundry Actions ──────────────────────────────────────────
+
+export type LaundryFilters = {
+  q?: string;
+  status?: string; // "IN_PROGRESS" | "READY" | ""
+};
+
+export async function getOrdersForLaundry(filters: LaundryFilters = {}) {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "LAUNDRY") return [];
+
+  const supabase = await createClient();
+  let query = supabase
+    .from("Order")
+    .select("id, orderNumber, customerName, customerPhone, totalAmount, orderStatus, createdAt, items:OrderItem(id)");
+
+  // Default: show IN_PROGRESS and READY
+  if (filters.status) {
+    query = query.eq("orderStatus", filters.status);
+  } else {
+    query = query.in("orderStatus", ["IN_PROGRESS", "READY"]);
+  }
+
+  if (filters.q) {
+    const q = filters.q.trim();
+    if (q) {
+      query = query.or(`orderNumber.ilike.%${q}%,customerName.ilike.%${q}%`);
+    }
+  }
+
+  const { data } = await query.order("createdAt", { ascending: false });
+  if (!data) return [];
+
+  return data.map((o: any) => ({
+    ...o,
+    totalAmount: { toNumber: () => Number(o.totalAmount), toString: () => String(o.totalAmount) },
+    createdAt: new Date(o.createdAt),
+    _count: { items: o.items?.length ?? 0 },
+  }));
+}
+
+export async function getOrderByIdForLaundry(orderId: string) {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "LAUNDRY") return null;
+
+  const supabase = await createClient();
+  const { data: order } = await supabase
+    .from("Order")
+    .select(`
+      *,
+      createdBy:users(name, email),
+      items:OrderItem(*)
+    `)
+    .eq("id", orderId)
+    .single();
+
+  if (!order) return null;
+
+  return {
+    ...order,
+    totalAmount: { toNumber: () => Number(order.totalAmount), toString: () => String(order.totalAmount) },
+    paidAmount: { toNumber: () => Number(order.paidAmount), toString: () => String(order.paidAmount) },
+    createdAt: new Date(order.createdAt),
+    createdBy: Array.isArray(order.createdBy) ? order.createdBy[0] : order.createdBy,
+    items: order.items.map((i: any) => ({
+      ...i,
+      unitPrice: { toNumber: () => Number(i.unitPrice), toString: () => String(i.unitPrice) },
+      lineTotal: { toNumber: () => Number(i.lineTotal), toString: () => String(i.lineTotal) },
+      weightKg: i.weightKg != null ? Number(i.weightKg) : null,
+    })),
+  };
+}
+
+const recordWeightSchema = z.object({
+  orderId: z.string().min(1),
+  itemId: z.string().min(1),
+  weightKg: z.number().positive("Weight must be greater than 0").nullable(),
+});
+
+export async function recordWeight(input: unknown): Promise<UpdateOrderStatusResult> {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "LAUNDRY") {
+    return { ok: false, error: "Unauthorized." };
+  }
+
+  const parsed = recordWeightSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
+  }
+
+  const { orderId, itemId, weightKg } = parsed.data;
+
+  const supabase = await createClient();
+  try {
+    const { error } = await supabase
+      .from("OrderItem")
+      .update({ weightKg })
+      .eq("id", itemId)
+      .eq("orderId", orderId);
+
+    if (error) throw error;
+
+    revalidatePath(`/laundry/orders/${orderId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not save weight." };
+  }
+}
+
+export async function markOrderReady(orderId: string): Promise<UpdateOrderStatusResult> {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "LAUNDRY") {
+    return { ok: false, error: "Unauthorized." };
+  }
+
+  const supabase = await createClient();
+  const { data: order } = await supabase
+    .from("Order")
+    .select("id, orderStatus")
+    .eq("id", orderId)
+    .single();
+
+  if (!order) return { ok: false, error: "Order not found." };
+  if (order.orderStatus !== OrderStatus.IN_PROGRESS) {
+    return { ok: false, error: "Order is not in progress." };
+  }
+
+  try {
+    const { error } = await supabase
+      .from("Order")
+      .update({ orderStatus: OrderStatus.READY })
+      .eq("id", orderId);
+
+    if (error) throw error;
+
+    revalidatePath("/laundry/orders");
+    revalidatePath(`/laundry/orders/${orderId}`);
+    revalidatePath("/reception/orders");
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not update status." };
+  }
 }
