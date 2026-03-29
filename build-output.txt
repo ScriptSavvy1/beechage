@@ -1,0 +1,55 @@
+﻿
+> beec-hage@0.1.0 build
+> next build
+
+   Γû▓ Next.js 15.5.14
+   - Environments: .env
+
+   Creating an optimized production build ...
+ Γ£ô Compiled successfully in 46s
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/18) ...
+   Generating static pages (4/18) 
+   Generating static pages (8/18) 
+   Generating static pages (13/18) 
+ Γ£ô Generating static pages (18/18)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                              Size  First Load JS
+Γöî ╞Æ /                                                   141 B         102 kB
+Γö£ Γùï /_not-found                                         997 B         103 kB
+Γö£ ╞Æ /admin                                             128 kB         234 kB
+Γö£ ╞Æ /admin/expenses                                   1.03 kB         106 kB
+Γö£ ╞Æ /admin/expenses/[expenseId]/edit                  2.13 kB         132 kB
+Γö£ ╞Æ /admin/expenses/new                               2.13 kB         132 kB
+Γö£ ╞Æ /admin/services                                     172 B         105 kB
+Γö£ ╞Æ /admin/services/[categoryId]/edit                 2.51 kB         132 kB
+Γö£ ╞Æ /admin/services/[categoryId]/items/[itemId]/edit  2.78 kB         133 kB
+Γö£ ╞Æ /admin/services/[categoryId]/items/new            2.22 kB         132 kB
+Γö£ ╞Æ /admin/services/new                               1.99 kB         132 kB
+Γö£ ╞Æ /admin/users                                       1.1 kB         106 kB
+Γö£ ╞Æ /admin/users/new                                  1.69 kB         132 kB
+Γö£ ╞Æ /api/health                                         141 B         102 kB
+Γö£ ╞Æ /api/orders/[orderId]/receipt                       141 B         102 kB
+Γö£ ╞Æ /laundry                                            172 B         105 kB
+Γö£ ╞Æ /laundry/orders                                     172 B         105 kB
+Γö£ ╞Æ /laundry/orders/[orderId]                         1.68 kB         107 kB
+Γö£ Γùï /login                                              923 B         103 kB
+Γö£ ╞Æ /reception                                          172 B         105 kB
+Γö£ ╞Æ /reception/orders                                 1.55 kB         107 kB
+Γö£ ╞Æ /reception/orders/[orderId]                       1.55 kB         107 kB
+Γö£ ╞Æ /reception/orders/[orderId]/edit                    129 B         134 kB
+Γöö ╞Æ /reception/orders/new                               129 B         134 kB
++ First Load JS shared by all                          102 kB
+  Γö£ chunks/493-17be2dc504a26423.js                    45.7 kB
+  Γö£ chunks/4bd1b696-409494caf8c83275.js               54.2 kB
+  Γöö other shared chunks (total)                          2 kB
+
+
+╞Æ Middleware                                            87 kB
+
+Γùï  (Static)   prerendered as static content
+╞Æ  (Dynamic)  server-rendered on demand
+

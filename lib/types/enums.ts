@@ -15,3 +15,8 @@ export enum PaymentStatus {
   PARTIALLY_PAID = "PARTIALLY_PAID",
   PAID = "PAID",
 }
+
+export enum PricingType {
+  FIXED = "FIXED",
+  PER_KG = "PER_KG",
+}

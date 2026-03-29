@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   id         UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email      TEXT UNIQUE NOT NULL,
   name       TEXT,
-  role       TEXT NOT NULL DEFAULT 'RECEPTION' CHECK (role IN ('ADMIN', 'RECEPTION')),
+  role       TEXT NOT NULL DEFAULT 'RECEPTION' CHECK (role IN ('ADMIN', 'RECEPTION', 'LAUNDRY')),
   "isActive" BOOLEAN NOT NULL DEFAULT true,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
   "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS public."ServiceItem" (
   "serviceCategoryId" UUID NOT NULL REFERENCES public."ServiceCategory"(id) ON DELETE CASCADE,
   name                TEXT NOT NULL,
   "defaultPrice"      NUMERIC(12,2) NOT NULL,
+  "pricingType"       TEXT NOT NULL DEFAULT 'FIXED' CHECK ("pricingType" IN ('FIXED', 'PER_KG')),
   "sortOrder"         INT NOT NULL DEFAULT 0,
   "isActive"          BOOLEAN NOT NULL DEFAULT true,
   UNIQUE("serviceCategoryId", name)
@@ -151,6 +152,8 @@ CREATE TABLE IF NOT EXISTS public."OrderItem" (
   quantity            INT NOT NULL,
   "unitPrice"         NUMERIC(12,2) NOT NULL,
   "lineTotal"         NUMERIC(12,2) NOT NULL,
+  "pricingType"       TEXT NOT NULL DEFAULT 'FIXED' CHECK ("pricingType" IN ('FIXED', 'PER_KG')),
+  "weightKg"          NUMERIC(8,3),
   "sortOrder"         INT NOT NULL DEFAULT 0
 );
 

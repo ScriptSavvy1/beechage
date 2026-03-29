@@ -5,13 +5,21 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import type { FieldErrors, UseFormRegister, UseFormSetValue } from "react-hook-form";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
-import { createOrder } from "@/lib/actions/orders";
+import { createOrder, updateOrder } from "@/lib/actions/orders";
 import type { ServiceCatalogCategory } from "@/lib/actions/orders";
 import { formatCurrency } from "@/lib/format";
-import { createOrderSchema, type CreateOrderInput, type OrderLineInput } from "@/lib/validations/order";
+import { createOrderSchema, type CreateOrderInput, type UpdateOrderInput, type OrderLineInput } from "@/lib/validations/order";
 
 type Props = {
   catalog: ServiceCatalogCategory[];
+  mode?: "create" | "edit";
+  orderId?: string;
+  defaultValues?: {
+    customerName: string;
+    customerPhone: string;
+    notes: string;
+    items: OrderLineInput[];
+  };
 };
 
 function defaultLine(catalog: ServiceCatalogCategory[]): OrderLineInput {
@@ -36,17 +44,26 @@ function defaultLine(catalog: ServiceCatalogCategory[]): OrderLineInput {
   };
 }
 
-export function OrderForm({ catalog }: Props) {
+export function OrderForm({ catalog, mode = "create", orderId, defaultValues: editDefaults }: Props) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const defaultValues: CreateOrderInput = {
-    notes: "",
-    customerName: "",
-    customerPhone: "",
-    items: [defaultLine(catalog)],
-  };
+  const isEdit = mode === "edit" && !!orderId;
+
+  const defaultValues: CreateOrderInput = editDefaults
+    ? {
+        notes: editDefaults.notes,
+        customerName: editDefaults.customerName,
+        customerPhone: editDefaults.customerPhone,
+        items: editDefaults.items.length > 0 ? editDefaults.items : [defaultLine(catalog)],
+      }
+    : {
+        notes: "",
+        customerName: "",
+        customerPhone: "",
+        items: [defaultLine(catalog)],
+      };
 
   const {
     register,
@@ -66,32 +83,59 @@ export function OrderForm({ catalog }: Props) {
 
   const watchedItems = useWatch({ control, name: "items" }) ?? defaultValues.items;
 
-  const grandTotal = useMemo(() => {
-    return watchedItems.reduce((sum, row) => {
-      const q = Number(row?.quantity) || 0;
-      if (!row) return sum;
+  // Find which items are PER_KG for display logic
+  const getItemPricingType = (row: OrderLineInput | undefined) => {
+    if (!row || row.kind === "custom") return "FIXED";
+    const cat = catalog.find((c) => c.id === row.serviceCategoryId);
+    const item = cat?.items.find((i) => i.id === row.serviceItemId);
+    return item?.pricingType ?? "FIXED";
+  };
+
+  const { grandTotal, hasPendingKg } = useMemo(() => {
+    let total = 0;
+    let pending = false;
+    for (const row of watchedItems) {
+      if (!row) continue;
+      const q = Number(row.quantity) || 0;
       if (row.kind === "custom") {
         const p = Number(row.unitPrice) || 0;
-        return sum + q * p;
+        total += q * p;
+      } else {
+        const cat = catalog.find((c) => c.id === row.serviceCategoryId);
+        const item = cat?.items.find((i) => i.id === row.serviceItemId);
+        if (item?.pricingType === "PER_KG") {
+          pending = true;
+          // Don't add to total — price TBD
+        } else {
+          const p = item?.defaultPrice ?? 0;
+          total += q * p;
+        }
       }
-      const cat = catalog.find((c) => c.id === row.serviceCategoryId);
-      const item = cat?.items.find((i) => i.id === row.serviceItemId);
-      const p = item?.defaultPrice ?? 0;
-      return sum + q * p;
-    }, 0);
+    }
+    return { grandTotal: total, hasPendingKg: pending };
   }, [watchedItems, catalog]);
 
   const onSubmit = (data: CreateOrderInput) => {
     setError(null);
     startTransition(async () => {
-      const result = await createOrder(data);
-      if (result.ok) {
-        // Redirect to order detail page so the user can print the receipt
-        router.push(`/reception/orders/${result.orderId}`);
-        router.refresh();
-        return;
+      if (isEdit) {
+        const editData: UpdateOrderInput = { ...data, orderId: orderId! };
+        const result = await updateOrder(editData);
+        if (result.ok) {
+          router.push(`/reception/orders/${orderId}`);
+          router.refresh();
+          return;
+        }
+        setError(result.error);
+      } else {
+        const result = await createOrder(data);
+        if (result.ok) {
+          router.push(`/reception/orders/${result.orderId}`);
+          router.refresh();
+          return;
+        }
+        setError(result.error);
       }
-      setError(result.error);
     });
   };
 
@@ -179,6 +223,7 @@ export function OrderForm({ catalog }: Props) {
                       watchedItems={watchedItems}
                       canRemove={fields.length > 1}
                       onRemove={() => remove(index)}
+                      getItemPricingType={getItemPricingType}
                     />
                   ))}
                 </tbody>
@@ -192,6 +237,11 @@ export function OrderForm({ catalog }: Props) {
           <div className="rounded-2xl border border-zinc-200 bg-zinc-900 p-6 text-white shadow-lg">
             <p className="text-sm font-medium text-zinc-300">Order total</p>
             <p className="mt-2 text-3xl font-semibold tracking-tight">{formatCurrency(grandTotal)}</p>
+            {hasPendingKg && (
+              <p className="mt-2 rounded-md bg-amber-500/20 px-2 py-1 text-xs text-amber-200">
+                ⚖️ + pending per-KG items (priced after weighing)
+              </p>
+            )}
             <p className="mt-2 text-xs text-zinc-400">
               Totals are recalculated on the server when you save.
             </p>
@@ -203,7 +253,7 @@ export function OrderForm({ catalog }: Props) {
               disabled={isPending || catalog.length === 0}
               className="mt-6 w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900 shadow transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isPending ? "Saving…" : "Save order"}
+              {isPending ? "Saving…" : isEdit ? "Update order" : "Save order"}
             </button>
           </div>
         </aside>
@@ -214,7 +264,10 @@ export function OrderForm({ catalog }: Props) {
         <div className="mx-auto flex max-w-lg items-center justify-between gap-4">
           <div className="text-white">
             <p className="text-xs text-zinc-400">Total</p>
-            <p className="text-xl font-semibold tracking-tight">{formatCurrency(grandTotal)}</p>
+            <p className="text-xl font-semibold tracking-tight">
+              {formatCurrency(grandTotal)}
+              {hasPendingKg && <span className="ml-1 text-xs text-amber-300">+ pending</span>}
+            </p>
           </div>
           {error && <p className="text-xs text-red-300">{error}</p>}
           <button
@@ -222,7 +275,7 @@ export function OrderForm({ catalog }: Props) {
             disabled={isPending || catalog.length === 0}
             className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-zinc-900 shadow transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isPending ? "Saving…" : "Save order"}
+            {isPending ? "Saving…" : isEdit ? "Update" : "Save order"}
           </button>
         </div>
       </div>
@@ -239,6 +292,7 @@ function OrderItemRow({
   watchedItems,
   canRemove,
   onRemove,
+  getItemPricingType,
 }: {
   index: number;
   catalog: ServiceCatalogCategory[];
@@ -248,10 +302,13 @@ function OrderItemRow({
   watchedItems: CreateOrderInput["items"];
   canRemove: boolean;
   onRemove: () => void;
+  getItemPricingType: (row: OrderLineInput | undefined) => string;
 }) {
   const row = watchedItems[index];
   const cat = row ? catalog.find((c) => c.id === row.serviceCategoryId) : undefined;
   const qty = Number(row?.quantity) || 0;
+  const pricingType = getItemPricingType(row);
+  const isPerKg = pricingType === "PER_KG";
 
   let unitPriceDisplay = 0;
   let lineTotal = 0;
@@ -261,7 +318,9 @@ function OrderItemRow({
   } else if (row?.kind === "catalog" && cat) {
     const item = cat.items.find((i) => i.id === row.serviceItemId);
     unitPriceDisplay = item?.defaultPrice ?? 0;
-    lineTotal = qty * unitPriceDisplay;
+    if (!isPerKg) {
+      lineTotal = qty * unitPriceDisplay;
+    }
   }
 
   const rawItems = errors.items as unknown;
@@ -285,7 +344,7 @@ function OrderItemRow({
   }
 
   return (
-    <tr>
+    <tr className={isPerKg ? "bg-blue-50/40" : ""}>
       <td className="py-3 pr-3 align-top">
         <input type="hidden" {...register(`items.${index}.kind` as const)} />
         <select
@@ -341,7 +400,7 @@ function OrderItemRow({
               <option value="">Select item</option>
               {(cat?.items ?? []).map((i) => (
                 <option key={i.id} value={i.id}>
-                  {i.name} ({formatCurrency(i.defaultPrice)})
+                  {i.name} {i.pricingType === "PER_KG" ? `(⚖️ ${formatCurrency(i.defaultPrice)}/kg)` : `(${formatCurrency(i.defaultPrice)})`}
                 </option>
               ))}
             </select>
@@ -352,26 +411,40 @@ function OrderItemRow({
         )}
       </td>
       <td className="py-3 pr-3 align-top">
-        <input
-          type="number"
-          min={1}
-          step={1}
-          className="w-20 rounded-lg border border-zinc-300 px-2 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
-          {...register(`items.${index}.quantity` as const, { valueAsNumber: true })}
-        />
-        {itemErrors?.quantity && (
-          <p className="mt-1 text-xs text-red-600">{String(itemErrors.quantity.message)}</p>
+        {isPerKg ? (
+          <span className="inline-flex items-center rounded-md bg-blue-100 px-2 py-1.5 text-xs font-medium text-blue-800">
+            ⚖️ By weight
+          </span>
+        ) : (
+          <>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              className="w-20 rounded-lg border border-zinc-300 px-2 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-zinc-400 focus:ring-2"
+              {...register(`items.${index}.quantity` as const, { valueAsNumber: true })}
+            />
+            {itemErrors?.quantity && (
+              <p className="mt-1 text-xs text-red-600">{String(itemErrors.quantity.message)}</p>
+            )}
+          </>
         )}
       </td>
       <td className="py-3 pr-3 align-top">
         {row?.kind === "custom" ? (
           <span className="text-xs text-zinc-500">entered above</span>
+        ) : isPerKg ? (
+          <span className="text-xs font-medium text-blue-700">{formatCurrency(unitPriceDisplay)}/kg</span>
         ) : (
           <span className="font-medium tabular-nums text-zinc-900">{formatCurrency(unitPriceDisplay)}</span>
         )}
       </td>
       <td className="py-3 pr-3 text-right align-top font-medium tabular-nums text-zinc-900">
-        {formatCurrency(lineTotal)}
+        {isPerKg ? (
+          <span className="rounded-md bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">TBD</span>
+        ) : (
+          formatCurrency(lineTotal)
+        )}
       </td>
       <td className="py-3 align-top">
         {canRemove && (

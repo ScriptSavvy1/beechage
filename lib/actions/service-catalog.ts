@@ -40,6 +40,7 @@ export async function getServiceCategoriesForAdmin() {
       })
       .map((i: any) => ({
         ...i,
+        pricingType: i.pricingType || "FIXED",
         defaultPrice: { toNumber: () => Number(i.defaultPrice), toString: () => String(i.defaultPrice) },
       })),
   }));
@@ -65,6 +66,7 @@ export async function getServiceCategoryById(id: string) {
       })
       .map((i: any) => ({
         ...i,
+        pricingType: i.pricingType || "FIXED",
         defaultPrice: { toNumber: () => Number(i.defaultPrice), toString: () => String(i.defaultPrice) },
       })),
   };
@@ -84,6 +86,7 @@ export async function getServiceItemForEdit(categoryId: string, itemId: string) 
 
   return {
     ...data,
+    pricingType: data.pricingType || "FIXED",
     defaultPrice: { toNumber: () => Number(data.defaultPrice), toString: () => String(data.defaultPrice) },
   };
 }
@@ -203,7 +206,7 @@ export async function createServiceItem(
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
-  const { name, defaultPrice, sortOrder, isActive } = parsed.data;
+  const { name, defaultPrice, pricingType, sortOrder, isActive } = parsed.data;
   try {
     const { data: row, error } = await supabase
       .from("ServiceItem")
@@ -211,6 +214,7 @@ export async function createServiceItem(
         serviceCategoryId: categoryId,
         name,
         defaultPrice,
+        pricingType,
         sortOrder,
         isActive,
       })
@@ -235,7 +239,7 @@ export async function updateServiceItem(input: unknown): Promise<ActionResult> {
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
-  const { id, serviceCategoryId, name, defaultPrice, sortOrder, isActive } = parsed.data;
+  const { id, serviceCategoryId, name, defaultPrice, pricingType, sortOrder, isActive } = parsed.data;
 
   const supabase = await createClient();
   const { data: cat } = await supabase
@@ -262,7 +266,7 @@ export async function updateServiceItem(input: unknown): Promise<ActionResult> {
   try {
     const { error } = await supabase
       .from("ServiceItem")
-      .update({ name, defaultPrice, sortOrder, isActive })
+      .update({ name, defaultPrice, pricingType, sortOrder, isActive })
       .eq("id", id);
 
     if (error) throw error;

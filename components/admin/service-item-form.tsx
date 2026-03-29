@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { AlertBanner } from "@/components/forms/alert-banner";
 import { FormField } from "@/components/forms/form-field";
@@ -37,6 +37,7 @@ export function ServiceItemForm(props: Props) {
       : {
           name: "",
           defaultPrice: 0.01,
+          pricingType: "FIXED",
           sortOrder: 10,
           isActive: true,
         };
@@ -55,12 +56,15 @@ export function ServiceItemForm(props: Props) {
 
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm<ServiceItemFormInput | EditFormValues>({
     resolver: resolver as Resolver<ServiceItemFormInput | EditFormValues>,
     defaultValues,
   });
+
+  const watchedPricingType = useWatch({ control, name: "pricingType" }) ?? "FIXED";
 
   const onSubmit = (data: ServiceItemFormInput | EditFormValues) => {
     setServerError(null);
@@ -99,7 +103,25 @@ export function ServiceItemForm(props: Props) {
             <input id="name" className={formInputClassName} disabled={isPending} {...register("name")} />
           </FormField>
 
-          <FormField label="Default price (USD)" htmlFor="defaultPrice" error={errors.defaultPrice?.message} required>
+          <FormField label="Pricing type" htmlFor="pricingType" error={errors.pricingType?.message} required>
+            <select id="pricingType" className={formInputClassName} disabled={isPending} {...register("pricingType")}>
+              <option value="FIXED">Fixed price</option>
+              <option value="PER_KG">Per kilogram (⚖️)</option>
+            </select>
+          </FormField>
+
+          {watchedPricingType === "PER_KG" && (
+            <div className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800">
+              💡 The price you set below is the <strong>rate per kilogram</strong>. The final price will be calculated when the laundry staff weighs the items.
+            </div>
+          )}
+
+          <FormField
+            label={watchedPricingType === "PER_KG" ? "Price per KG (USD)" : "Default price (USD)"}
+            htmlFor="defaultPrice"
+            error={errors.defaultPrice?.message}
+            required
+          >
             <input
               id="defaultPrice"
               type="number"

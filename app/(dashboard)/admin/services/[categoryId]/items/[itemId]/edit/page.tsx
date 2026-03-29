@@ -42,6 +42,7 @@ export default async function EditServiceItemPage({ params }: Props) {
           defaultValues={{
             name: item.name,
             defaultPrice: item.defaultPrice.toNumber(),
+            pricingType: item.pricingType as "FIXED" | "PER_KG",
             sortOrder: item.sortOrder,
             isActive: item.isActive,
           }}

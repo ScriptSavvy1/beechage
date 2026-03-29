@@ -30,5 +30,21 @@ export const createOrderSchema = z.object({
   items: z.array(orderLineInputSchema).min(1, "Add at least one line item"),
 });
 
+// Edit order: same items schema, plus orderId. Customer info can also be updated.
+export const updateOrderSchema = z.object({
+  orderId: z.string().min(1, "Order ID is required"),
+  notes: z.string().max(2000).optional().nullable(),
+  customerName: z.string().trim().min(1, "Customer name is required").max(120),
+  customerPhone: z
+    .string()
+    .trim()
+    .min(1, "Customer phone is required")
+    .max(30, "Customer phone is too long")
+    .regex(/^[0-9+\-()\s]+$/, "Phone contains invalid characters")
+    .refine((s) => s.replace(/\D/g, "").length >= 7, "Phone must include at least 7 digits"),
+  items: z.array(orderLineInputSchema).min(1, "Add at least one line item"),
+});
+
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;
 export type OrderLineInput = z.infer<typeof orderLineInputSchema>;

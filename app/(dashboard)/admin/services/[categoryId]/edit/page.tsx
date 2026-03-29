@@ -10,6 +10,7 @@ interface CatalogItem {
   id: string;
   name: string;
   isActive: boolean;
+  pricingType: string;
   defaultPrice: { toNumber: () => number; toString: () => string };
 }
 
@@ -65,8 +66,17 @@ export default async function EditServiceCategoryPage({ params }: Props) {
               <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto text-sm">
                 {category.items.map((item: CatalogItem) => (
                   <li key={item.id} className="flex items-center justify-between gap-2 border-b border-zinc-50 pb-2">
-                    <span className={item.isActive ? "text-zinc-800" : "text-zinc-400"}>{item.name}</span>
-                    <span className="shrink-0 tabular-nums text-zinc-600">{formatCurrency(item.defaultPrice)}</span>
+                    <span className={item.isActive ? "text-zinc-800" : "text-zinc-400"}>
+                      {item.name}
+                      {item.pricingType === "PER_KG" && (
+                        <span className="ml-1 text-[10px] font-semibold text-blue-600">⚖️/kg</span>
+                      )}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-zinc-600">
+                      {item.pricingType === "PER_KG"
+                        ? `${formatCurrency(item.defaultPrice)}/kg`
+                        : formatCurrency(item.defaultPrice)}
+                    </span>
                     <Link
                       href={`/admin/services/${category.id}/items/${item.id}/edit`}
                       className="shrink-0 text-xs font-medium text-emerald-800 hover:underline"

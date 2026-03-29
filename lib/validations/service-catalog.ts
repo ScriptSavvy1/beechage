@@ -14,6 +14,7 @@ export const updateServiceCategorySchema = serviceCategoryFormSchema.extend({
 export const serviceItemFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
   defaultPrice: z.coerce.number().positive("Price must be greater than zero"),
+  pricingType: z.enum(["FIXED", "PER_KG"]).default("FIXED"),
   sortOrder: z.coerce.number().int().min(0),
   isActive: z.boolean(),
 });

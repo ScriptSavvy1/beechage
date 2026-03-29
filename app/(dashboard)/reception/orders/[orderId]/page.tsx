@@ -12,6 +12,8 @@ interface OrderItemRow {
   categoryName: string;
   itemName: string;
   quantity: number;
+  pricingType: string;
+  weightKg: number | null;
   unitPrice: { toNumber: () => number; toString: () => string };
   lineTotal: { toNumber: () => number; toString: () => string };
 }
@@ -33,6 +35,8 @@ export default async function OrderDetailPage({ params }: Props) {
   const totalAmount = order.totalAmount.toNumber();
   const paidAmount = order.paidAmount.toNumber();
   const remaining = totalAmount - paidAmount;
+  const isInProgress = order.orderStatus === "IN_PROGRESS";
+  const hasPendingKg = order.hasPendingKg;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-10">
@@ -99,64 +103,112 @@ export default async function OrderDetailPage({ params }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-50">
-              {order.items.map((item: OrderItemRow) => (
-                <tr key={item.id}>
-                  <td className="px-5 py-2.5 text-zinc-600">{item.categoryName}</td>
-                  <td className="px-5 py-2.5 font-medium text-zinc-900">{item.itemName}</td>
-                  <td className="px-5 py-2.5 text-right tabular-nums text-zinc-700">{item.quantity}</td>
-                  <td className="px-5 py-2.5 text-right tabular-nums text-zinc-700">
-                    {formatCurrency(item.unitPrice.toString())}
-                  </td>
-                  <td className="px-5 py-2.5 text-right font-medium tabular-nums text-zinc-900">
-                    {formatCurrency(item.lineTotal.toString())}
-                  </td>
-                </tr>
-              ))}
+              {order.items.map((item: OrderItemRow) => {
+                const isPerKg = item.pricingType === "PER_KG";
+                const isWeighed = isPerKg && item.weightKg != null && item.weightKg > 0;
+                return (
+                  <tr key={item.id} className={isPerKg ? "bg-blue-50/30" : ""}>
+                    <td className="px-5 py-2.5 text-zinc-600">{item.categoryName}</td>
+                    <td className="px-5 py-2.5 font-medium text-zinc-900">
+                      {item.itemName}
+                      {isPerKg && (
+                        <span className="ml-2 inline-flex rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                          ⚖️ Per KG
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tabular-nums text-zinc-700">
+                      {isPerKg ? (
+                        isWeighed ? `${item.weightKg} kg` : "—"
+                      ) : (
+                        item.quantity
+                      )}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tabular-nums text-zinc-700">
+                      {isPerKg ? (
+                        <span className="text-blue-700">{formatCurrency(item.unitPrice.toString())}/kg</span>
+                      ) : (
+                        formatCurrency(item.unitPrice.toString())
+                      )}
+                    </td>
+                    <td className="px-5 py-2.5 text-right font-medium tabular-nums text-zinc-900">
+                      {isPerKg && !isWeighed ? (
+                        <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">TBD</span>
+                      ) : (
+                        formatCurrency(item.lineTotal.toString())
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
 
         {/* Mobile */}
         <div className="divide-y divide-zinc-100 sm:hidden">
-          {order.items.map((item: OrderItemRow) => (
-            <div key={item.id} className="px-4 py-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-medium text-zinc-900">{item.itemName}</p>
-                  <p className="text-xs text-zinc-500">{item.categoryName}</p>
+          {order.items.map((item: OrderItemRow) => {
+            const isPerKg = item.pricingType === "PER_KG";
+            const isWeighed = isPerKg && item.weightKg != null && item.weightKg > 0;
+            return (
+              <div key={item.id} className={`px-4 py-3 ${isPerKg ? "bg-blue-50/30" : ""}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-zinc-900">
+                      {item.itemName}
+                      {isPerKg && (
+                        <span className="ml-1 text-[10px] font-semibold text-blue-700">⚖️</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-zinc-500">{item.categoryName}</p>
+                  </div>
+                  <p className="font-semibold tabular-nums text-zinc-900">
+                    {isPerKg && !isWeighed ? (
+                      <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-800">TBD</span>
+                    ) : (
+                      formatCurrency(item.lineTotal.toString())
+                    )}
+                  </p>
                 </div>
-                <p className="font-semibold tabular-nums text-zinc-900">
-                  {formatCurrency(item.lineTotal.toString())}
+                <p className="mt-1 text-xs text-zinc-500">
+                  {isPerKg
+                    ? `${formatCurrency(item.unitPrice.toString())}/kg${isWeighed ? ` × ${item.weightKg} kg` : ""}`
+                    : `${item.quantity} × ${formatCurrency(item.unitPrice.toString())}`}
                 </p>
               </div>
-              <p className="mt-1 text-xs text-zinc-500">
-                {item.quantity} × {formatCurrency(item.unitPrice.toString())}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
       {/* Payment Summary */}
       <section className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm sm:mb-6 sm:p-5">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">Payment</h2>
-        <div className="space-y-2">
-          <div className="flex justify-between text-sm">
-            <span className="text-zinc-600">Total</span>
-            <span className="font-semibold text-zinc-900">{formatCurrency(totalAmount.toFixed(2))}</span>
+
+        {hasPendingKg && isInProgress ? (
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            ⚖️ <strong>Total pending</strong> — Some items are priced per KG and awaiting weight measurement by laundry.
           </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-zinc-600">Paid</span>
-            <span className="font-medium text-emerald-700">{formatCurrency(paidAmount.toFixed(2))}</span>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-zinc-600">Total</span>
+              <span className="font-semibold text-zinc-900">{formatCurrency(totalAmount.toFixed(2))}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-zinc-600">Paid</span>
+              <span className="font-medium text-emerald-700">{formatCurrency(paidAmount.toFixed(2))}</span>
+            </div>
+            <div className="flex justify-between border-t border-zinc-200 pt-2 text-sm">
+              <span className="font-medium text-zinc-800">Remaining</span>
+              <span className={`font-semibold ${remaining > 0 ? "text-red-700" : "text-emerald-700"}`}>
+                {formatCurrency(remaining.toFixed(2))}
+              </span>
+            </div>
           </div>
-          <div className="flex justify-between border-t border-zinc-200 pt-2 text-sm">
-            <span className="font-medium text-zinc-800">Remaining</span>
-            <span className={`font-semibold ${remaining > 0 ? "text-red-700" : "text-emerald-700"}`}>
-              {formatCurrency(remaining.toFixed(2))}
-            </span>
-          </div>
-        </div>
-        {remaining > 0 && (
+        )}
+
+        {remaining > 0 && !hasPendingKg && (
           <div className="mt-4">
             <RecordPaymentForm orderId={order.id} remaining={remaining} />
           </div>
@@ -166,6 +218,16 @@ export default async function OrderDetailPage({ params }: Props) {
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-3">
         <OrderStatusActions orderId={order.id} orderStatus={order.orderStatus} />
+
+        {isInProgress && (
+          <Link
+            href={`/reception/orders/${order.id}/edit`}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white shadow transition hover:bg-blue-800"
+          >
+            ✏️ Edit Order
+          </Link>
+        )}
+
         <Link
           href={`/api/orders/${order.id}/receipt`}
           target="_blank"
