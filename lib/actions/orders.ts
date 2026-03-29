@@ -512,7 +512,10 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
   }
 
   const newPaid = paidAmount + amount;
-  const paymentStatus = newPaid >= totalAmount ? PaymentStatus.PAID
+  const newRemaining = totalAmount - newPaid;
+  // Discount tolerance: if remaining is $5 or less, consider it fully paid
+  const DISCOUNT_TOLERANCE = 5;
+  const paymentStatus = newRemaining <= DISCOUNT_TOLERANCE ? PaymentStatus.PAID
     : newPaid > 0 ? PaymentStatus.PARTIALLY_PAID
     : PaymentStatus.UNPAID;
 
