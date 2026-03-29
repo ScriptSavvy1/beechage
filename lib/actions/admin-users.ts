@@ -1,20 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { auth } from "@/lib/auth";
 import { createServerClient } from "@supabase/ssr";
 import { createReceptionUserSchema } from "@/lib/validations/admin-users";
-import { Role } from "@/lib/types/enums";
+import { requireTenantAdmin } from "@/lib/tenant";
 
 export type ActionResult<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
-async function requireAdminId(): Promise<string | null> {
-  const session = await auth();
-  if (!session?.user?.id || session.user.role !== "ADMIN") return null;
-  return session.user.id;
-}
-
-// We need a Service Role client to create users without logging the current Admin out.
+// Service Role client — bypasses RLS, used for admin operations
 function getServiceRoleClient() {
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -33,7 +26,7 @@ function getServiceRoleClient() {
 }
 
 export async function createReceptionUser(input: unknown): Promise<ActionResult<{ id: string }>> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireTenantAdmin();
 
   const parsed = createReceptionUserSchema.safeParse(input);
   if (!parsed.success) {
@@ -49,14 +42,17 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
   const supabaseAdmin = getServiceRoleClient();
 
   try {
-    // This will trigger the DB trigger on auth.users to insert into public.users automatically
+    // Create auth user with tenant_id in app_metadata (secure, not user-writable)
     const { data: user, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
+      app_metadata: {
+        tenant_id: ctx.tenantId,
+        role,
+      },
       user_metadata: {
         name: name?.trim() || null,
-        role: role || Role.RECEPTION,
       }
     });
 
@@ -66,6 +62,9 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
       }
       throw error;
     }
+
+    // The DB trigger auto-creates public.users + tenant_memberships rows
+    // via handle_new_user() reading from app_metadata
 
     revalidatePath("/admin/users/new");
     revalidatePath("/admin");
@@ -77,38 +76,48 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
 }
 
 export async function deleteUser(userId: string): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireTenantAdmin();
 
   // Cannot delete yourself
-  const session = await auth();
-  if (session?.user?.id === userId) {
+  if (ctx.userId === userId) {
     return { ok: false, error: "Cannot delete your own account." };
   }
 
   const supabaseAdmin = getServiceRoleClient();
 
-  // Check for linked orders
+  // Verify user belongs to this tenant (manual check — service_role bypasses RLS)
+  const { data: targetUser } = await supabaseAdmin
+    .from("users")
+    .select("id, tenant_id")
+    .eq("id", userId)
+    .eq("tenant_id", ctx.tenantId)
+    .single();
+
+  if (!targetUser) return { ok: false, error: "User not found in your organization." };
+
+  // Check for linked orders (scoped to tenant)
   const { count: orderCount } = await supabaseAdmin
     .from("Order")
     .select("id", { count: "exact", head: true })
-    .eq("createdById", userId);
+    .eq("createdById", userId)
+    .eq("tenant_id", ctx.tenantId);
 
   if (orderCount && orderCount > 0) {
     return { ok: false, error: `Cannot delete: user has ${orderCount} order(s). Deactivate instead.` };
   }
 
-  // Check for linked expenses
+  // Check for linked expenses (scoped to tenant)
   const { count: expenseCount } = await supabaseAdmin
     .from("Expense")
     .select("id", { count: "exact", head: true })
-    .eq("createdById", userId);
+    .eq("createdById", userId)
+    .eq("tenant_id", ctx.tenantId);
 
   if (expenseCount && expenseCount > 0) {
     return { ok: false, error: `Cannot delete: user has ${expenseCount} expense(s). Deactivate instead.` };
   }
 
   try {
-    // Delete from auth.users (cascade will remove public.users row)
     const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
     if (error) throw error;
 
@@ -122,21 +131,41 @@ export async function deleteUser(userId: string): Promise<ActionResult> {
 }
 
 export async function deactivateUser(userId: string): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireTenantAdmin();
 
-  const session = await auth();
-  if (session?.user?.id === userId) {
+  if (ctx.userId === userId) {
     return { ok: false, error: "Cannot deactivate your own account." };
   }
 
   const supabaseAdmin = getServiceRoleClient();
+
+  // Verify user belongs to this tenant
+  const { data: targetUser } = await supabaseAdmin
+    .from("users")
+    .select("id, tenant_id")
+    .eq("id", userId)
+    .eq("tenant_id", ctx.tenantId)
+    .single();
+
+  if (!targetUser) return { ok: false, error: "User not found in your organization." };
+
   try {
-    const { error } = await supabaseAdmin
+    // Deactivate in public.users
+    const { error: userError } = await supabaseAdmin
       .from("users")
       .update({ isActive: false })
       .eq("id", userId);
 
-    if (error) throw error;
+    if (userError) throw userError;
+
+    // Deactivate membership
+    const { error: memberError } = await supabaseAdmin
+      .from("tenant_memberships")
+      .update({ is_active: false })
+      .eq("user_id", userId)
+      .eq("tenant_id", ctx.tenantId);
+
+    if (memberError) throw memberError;
 
     revalidatePath("/admin");
     return { ok: true };

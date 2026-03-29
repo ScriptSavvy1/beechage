@@ -2,7 +2,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { auth } from "@/lib/auth";
+import { requireTenantAdmin } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
 import { expenseFormSchema, updateExpenseSchema } from "@/lib/validations/expense";
 
@@ -10,14 +10,14 @@ export type ExpenseActionResult<T = void> =
   | { ok: true; data?: T }
   | { ok: false; error: string };
 
-async function requireAdminUserId(): Promise<string | null> {
-  const session = await auth();
-  if (!session?.user?.id || session.user.role !== "ADMIN") return null;
-  return session.user.id;
+async function requireAdmin() {
+  return requireTenantAdmin();
 }
 
 export async function getExpenseCategoriesForAdmin() {
-  if (!(await requireAdminUserId())) return [];
+  await requireAdmin();
+
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data } = await supabase
     .from("ExpenseCategory")
@@ -33,13 +33,14 @@ export type ExpenseFilters = {
   q?: string;
   categoryId?: string;
   userId?: string;
-  from?: string; // YYYY-MM-DD
-  to?: string;   // YYYY-MM-DD
+  from?: string;
+  to?: string;
 };
 
 export async function getExpensesList(filters: ExpenseFilters = {}) {
-  if (!(await requireAdminUserId())) return [];
+  await requireAdmin();
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   let query = supabase
     .from("Expense")
@@ -70,7 +71,6 @@ export async function getExpensesList(filters: ExpenseFilters = {}) {
 
   if (!expenses) return [];
 
-  // Return Prisma-compatible shape with Decimal-like objects
   return expenses.map((e: any) => ({
     ...e,
     amount: { toNumber: () => Number(e.amount), toString: () => String(e.amount) },
@@ -82,8 +82,9 @@ export async function getExpensesList(filters: ExpenseFilters = {}) {
 }
 
 export async function getExpenseById(id: string) {
-  if (!(await requireAdminUserId())) return null;
+  await requireAdmin();
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: expense } = await supabase
     .from("Expense")
@@ -104,8 +105,7 @@ export async function getExpenseById(id: string) {
 }
 
 export async function createExpense(input: unknown): Promise<ExpenseActionResult<{ id: string }>> {
-  const adminId = await requireAdminUserId();
-  if (!adminId) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireAdmin();
 
   const parsed = expenseFormSchema.safeParse(input);
   if (!parsed.success) {
@@ -120,6 +120,7 @@ export async function createExpense(input: unknown): Promise<ExpenseActionResult
 
   const { expenseCategoryId, amount, expenseDate, description } = parsed.data;
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: category } = await supabase
     .from("ExpenseCategory")
@@ -134,12 +135,14 @@ export async function createExpense(input: unknown): Promise<ExpenseActionResult
     const { data: expense, error } = await supabase
       .from("Expense")
       .insert({
+        tenant_id: ctx.tenantId,
         expenseCategoryId: category.id,
         categoryName: category.name,
         amount,
         expenseDate,
         description: description?.trim() || null,
-        createdById: adminId,
+        createdById: ctx.userId,
+        branch_id: ctx.branchId,
       })
       .select("id")
       .single();
@@ -155,8 +158,7 @@ export async function createExpense(input: unknown): Promise<ExpenseActionResult
 }
 
 export async function updateExpense(input: unknown): Promise<ExpenseActionResult> {
-  const adminId = await requireAdminUserId();
-  if (!adminId) return { ok: false, error: "Unauthorized." };
+  await requireAdmin();
 
   const parsed = updateExpenseSchema.safeParse(input);
   if (!parsed.success) {
@@ -170,6 +172,7 @@ export async function updateExpense(input: unknown): Promise<ExpenseActionResult
 
   const { id, expenseCategoryId, amount, expenseDate, description } = parsed.data;
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: existing } = await supabase
     .from("Expense")
@@ -212,9 +215,9 @@ export async function updateExpense(input: unknown): Promise<ExpenseActionResult
 }
 
 export async function deleteExpense(id: string): Promise<ExpenseActionResult> {
-  const adminId = await requireAdminUserId();
-  if (!adminId) return { ok: false, error: "Unauthorized." };
+  await requireAdmin();
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: existing } = await supabase
     .from("Expense")
@@ -241,7 +244,7 @@ export async function deleteExpense(id: string): Promise<ExpenseActionResult> {
 }
 
 export async function createExpenseCategory(input: { name: string; sortOrder?: number }): Promise<ExpenseActionResult<{ id: string }>> {
-  if (!(await requireAdminUserId())) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireAdmin();
 
   const name = input.name?.trim();
   if (!name) return { ok: false, error: "Name is required." };
@@ -250,7 +253,7 @@ export async function createExpenseCategory(input: { name: string; sortOrder?: n
   try {
     const { data, error } = await supabase
       .from("ExpenseCategory")
-      .insert({ name, sortOrder: input.sortOrder ?? 0, isActive: true })
+      .insert({ tenant_id: ctx.tenantId, name, sortOrder: input.sortOrder ?? 0, isActive: true })
       .select("id")
       .single();
 
@@ -265,10 +268,10 @@ export async function createExpenseCategory(input: { name: string; sortOrder?: n
 }
 
 export async function deleteExpenseCategory(id: string): Promise<ExpenseActionResult> {
-  if (!(await requireAdminUserId())) return { ok: false, error: "Unauthorized." };
-  const supabase = await createClient();
+  await requireAdmin();
 
-  // Check for linked expenses
+  // RLS auto-filters by tenant_id
+  const supabase = await createClient();
   const { count } = await supabase
     .from("Expense")
     .select("id", { count: "exact", head: true })

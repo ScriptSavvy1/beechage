@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { auth } from "@/lib/auth";
+import { auth, isAdminRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { UserActions } from "@/components/admin/user-actions";
 
 export default async function AdminUsersPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== "ADMIN") return null;
+  if (!session?.user || !isAdminRole(session.user.role)) return null;
 
   const supabase = await createClient();
   const { data: users } = await supabase
@@ -49,7 +49,9 @@ export default async function AdminUsersPage() {
                   <td className="px-4 py-3">{user.email}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      user.role === "ADMIN"
+                      user.role === "OWNER"
+                        ? "bg-amber-100 text-amber-800"
+                        : user.role === "ADMIN"
                         ? "bg-purple-100 text-purple-800"
                         : user.role === "LAUNDRY"
                         ? "bg-blue-100 text-blue-800"

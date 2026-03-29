@@ -4,6 +4,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
+import { getTenantContext } from "@/lib/tenant";
 import { generateOrderNumber } from "@/lib/orders/order-number";
 import { createClient } from "@/lib/supabase/server";
 import { createOrderSchema, updateOrderSchema } from "@/lib/validations/order";
@@ -26,6 +27,7 @@ export async function getServiceCatalogForReception(): Promise<ServiceCatalogCat
     return [];
   }
 
+  // RLS auto-filters by tenant_id from JWT
   const supabase = await createClient();
   const { data: rows } = await supabase
     .from("ServiceCategory")
@@ -61,8 +63,8 @@ export async function getServiceCatalogForReception(): Promise<ServiceCatalogCat
 export type OrderFilters = {
   q?: string;
   orderStatus?: string;
-  from?: string; // YYYY-MM-DD
-  to?: string;   // YYYY-MM-DD
+  from?: string;
+  to?: string;
 };
 
 export async function getMyOrdersForReception(filters: OrderFilters = {}) {
@@ -71,6 +73,7 @@ export async function getMyOrdersForReception(filters: OrderFilters = {}) {
     return [];
   }
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   let query = supabase
     .from("Order")
@@ -196,7 +199,6 @@ async function resolveOrderLines(
     const unitPrice = Number(item.defaultPrice);
 
     if (pricingType === PricingType.PER_KG) {
-      // Per KG: lineTotal = 0 until weighed by laundry, quantity forced to 1
       hasPerKg = true;
       lines.push({
         serviceCategoryId: cat.id,
@@ -204,13 +206,12 @@ async function resolveOrderLines(
         serviceItemId: item.id,
         itemName: item.name,
         quantity: 1,
-        unitPrice, // this is the rate per KG
+        unitPrice,
         lineTotal: 0,
         pricingType: PricingType.PER_KG,
         sortOrder: i,
       });
     } else {
-      // Fixed: normal calculation
       const lineTotal = unitPrice * row.quantity;
       fixedTotal += lineTotal;
       lines.push({
@@ -231,8 +232,8 @@ async function resolveOrderLines(
 }
 
 export async function createOrder(input: unknown): Promise<CreateOrderResult> {
-  const session = await auth();
-  if (!session?.user?.id || session.user.role !== "RECEPTION") {
+  const ctx = await getTenantContext();
+  if (!ctx || ctx.role !== "RECEPTION") {
     return { ok: false, error: "Unauthorized." };
   }
 
@@ -254,37 +255,40 @@ export async function createOrder(input: unknown): Promise<CreateOrderResult> {
 
   const { lines, fixedTotal } = resolved;
 
-  // Retry loop for order number collisions (same as original)
   const maxAttempts = 8;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const orderNumber = await generateOrderNumber();
+      const orderNumber = await generateOrderNumber(ctx.tenantSlug);
 
       const { data: order, error: orderError } = await supabase
         .from("Order")
         .insert({
+          tenant_id: ctx.tenantId,
           orderNumber,
-          createdById: session.user.id,
+          createdById: ctx.userId,
           notes: notes?.trim() || null,
-          totalAmount: fixedTotal, // Only fixed items for now; KG items add 0
+          totalAmount: fixedTotal,
           orderStatus: OrderStatus.IN_PROGRESS,
           paymentStatus: PaymentStatus.UNPAID,
           customerName,
           customerPhone,
+          branch_id: ctx.branchId,
         })
         .select("id, orderNumber")
         .single();
 
       if (orderError) throw orderError;
 
-      // Insert items
-      const linesToInsert = lines.map(l => ({ ...l, orderId: order.id }));
+      const linesToInsert = lines.map((l: any) => ({
+        ...l,
+        orderId: order.id,
+        tenant_id: ctx.tenantId,
+      }));
       const { error: itemsError } = await supabase
         .from("OrderItem")
         .insert(linesToInsert);
 
       if (itemsError) {
-        // Rollback: delete the order if items failed
         await supabase.from("Order").delete().eq("id", order.id);
         throw itemsError;
       }
@@ -312,8 +316,8 @@ export type UpdateOrderResult =
   | { ok: false; error: string };
 
 export async function updateOrder(input: unknown): Promise<UpdateOrderResult> {
-  const session = await auth();
-  if (!session?.user?.id || session.user.role !== "RECEPTION") {
+  const ctx = await getTenantContext();
+  if (!ctx || ctx.role !== "RECEPTION") {
     return { ok: false, error: "Unauthorized." };
   }
 
@@ -329,16 +333,15 @@ export async function updateOrder(input: unknown): Promise<UpdateOrderResult> {
 
   const { orderId, notes, customerName, customerPhone, items } = parsed.data;
 
+  // RLS ensures we can only see our tenant's orders
   const supabase = await createClient();
-
-  // Verify ownership and status
   const { data: existing } = await supabase
     .from("Order")
     .select("id, createdById, orderStatus")
     .eq("id", orderId)
     .single();
 
-  if (!existing || existing.createdById !== session.user.id) {
+  if (!existing || existing.createdById !== ctx.userId) {
     return { ok: false, error: "Order not found." };
   }
 
@@ -352,7 +355,6 @@ export async function updateOrder(input: unknown): Promise<UpdateOrderResult> {
   const { lines, fixedTotal } = resolved;
 
   try {
-    // Delete old items
     const { error: deleteError } = await supabase
       .from("OrderItem")
       .delete()
@@ -360,15 +362,17 @@ export async function updateOrder(input: unknown): Promise<UpdateOrderResult> {
 
     if (deleteError) throw deleteError;
 
-    // Insert new items
-    const linesToInsert = lines.map(l => ({ ...l, orderId }));
+    const linesToInsert = lines.map((l: any) => ({
+      ...l,
+      orderId,
+      tenant_id: ctx.tenantId,
+    }));
     const { error: itemsError } = await supabase
       .from("OrderItem")
       .insert(linesToInsert);
 
     if (itemsError) throw itemsError;
 
-    // Update order header
     const { error: updateError } = await supabase
       .from("Order")
       .update({
@@ -417,6 +421,7 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
 
   const { orderId, nextStatus } = parsed.data;
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
   const { data: existing } = await supabase
     .from("Order")
@@ -428,8 +433,6 @@ export async function updateMyOrderStatus(input: unknown): Promise<UpdateOrderSt
     return { ok: false, error: "Order not found." };
   }
 
-  // Reception can only mark READY → PICKED_UP
-  // (Laundry handles IN_PROGRESS → READY)
   const allowed = existing.orderStatus === OrderStatus.READY && nextStatus === OrderStatus.PICKED_UP;
 
   if (!allowed) {
@@ -477,6 +480,7 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
 
   const { orderId, amount } = parsed.data;
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
   const { data: order } = await supabase
     .from("Order")
@@ -488,9 +492,7 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
     return { ok: false, error: "Order not found." };
   }
 
-  // Block payment if order has unfinalized KG items (still IN_PROGRESS)
   if (order.orderStatus === OrderStatus.IN_PROGRESS) {
-    // Check if there are any PER_KG items
     const { data: kgItems } = await supabase
       .from("OrderItem")
       .select("id")
@@ -513,7 +515,6 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
 
   const newPaid = paidAmount + amount;
   const newRemaining = totalAmount - newPaid;
-  // Discount tolerance: if remaining is $5 or less, consider it fully paid
   const DISCOUNT_TOLERANCE = 5;
   const paymentStatus = newRemaining <= DISCOUNT_TOLERANCE ? PaymentStatus.PAID
     : newPaid > 0 ? PaymentStatus.PARTIALLY_PAID
@@ -542,6 +543,7 @@ export async function getOrderById(orderId: string) {
   const session = await auth();
   if (!session?.user?.id) return null;
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
   const { data: order } = await supabase
     .from("Order")
@@ -555,7 +557,6 @@ export async function getOrderById(orderId: string) {
 
   if (!order) return null;
 
-  // Sort items by sortOrder (to match Prisma's orderBy)
   if (order.items) {
     order.items.sort((a: any, b: any) => a.sortOrder - b.sortOrder);
   }
@@ -565,12 +566,10 @@ export async function getOrderById(orderId: string) {
     return null;
   }
 
-  // Check if order has any PER_KG items without weight
   const hasPendingKg = order.items.some(
     (i: any) => i.pricingType === "PER_KG" && (i.weightKg == null || Number(i.weightKg) <= 0)
   );
 
-  // Return Prisma-compatible shape with Decimal-like objects
   return {
     ...order,
     totalAmount: { toNumber: () => Number(order.totalAmount), toString: () => String(order.totalAmount) },
@@ -592,19 +591,19 @@ export async function getOrderById(orderId: string) {
 
 export type LaundryFilters = {
   q?: string;
-  status?: string; // "IN_PROGRESS" | "READY" | ""
+  status?: string;
 };
 
 export async function getOrdersForLaundry(filters: LaundryFilters = {}) {
   const session = await auth();
   if (!session?.user || session.user.role !== "LAUNDRY") return [];
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
   let query = supabase
     .from("Order")
     .select("id, orderNumber, customerName, customerPhone, totalAmount, orderStatus, createdAt, items:OrderItem(id, pricingType, weightKg)");
 
-  // Default: show IN_PROGRESS and READY
   if (filters.status) {
     query = query.eq("orderStatus", filters.status);
   } else {
@@ -641,6 +640,7 @@ export async function getOrderByIdForLaundry(orderId: string) {
   const session = await auth();
   if (!session?.user || session.user.role !== "LAUNDRY") return null;
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
   const { data: order } = await supabase
     .from("Order")
@@ -694,9 +694,8 @@ export async function recordWeight(input: unknown): Promise<UpdateOrderStatusRes
 
   const { orderId, itemId, weightKg } = parsed.data;
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
-
-  // Fetch the item to check pricing type
   const { data: item } = await supabase
     .from("OrderItem")
     .select("id, pricingType, unitPrice")
@@ -711,7 +710,6 @@ export async function recordWeight(input: unknown): Promise<UpdateOrderStatusRes
   try {
     const updateData: any = { weightKg };
 
-    // For PER_KG items, recalculate lineTotal when weight changes
     if (item.pricingType === PricingType.PER_KG && weightKg != null) {
       updateData.lineTotal = Number(item.unitPrice) * weightKg;
     }
@@ -738,6 +736,7 @@ export async function markOrderReady(orderId: string): Promise<UpdateOrderStatus
     return { ok: false, error: "Unauthorized." };
   }
 
+  // RLS auto-scopes to tenant
   const supabase = await createClient();
   const { data: order } = await supabase
     .from("Order")
@@ -750,7 +749,6 @@ export async function markOrderReady(orderId: string): Promise<UpdateOrderStatus
     return { ok: false, error: "Order is not in progress." };
   }
 
-  // Fetch all items to validate weights and recalculate total
   const { data: items } = await supabase
     .from("OrderItem")
     .select("id, pricingType, unitPrice, lineTotal, weightKg")
@@ -758,7 +756,6 @@ export async function markOrderReady(orderId: string): Promise<UpdateOrderStatus
 
   if (!items) return { ok: false, error: "Could not load order items." };
 
-  // Check all PER_KG items have weight
   const unweighed = items.filter(
     (i: any) => i.pricingType === "PER_KG" && (i.weightKg == null || Number(i.weightKg) <= 0)
   );
@@ -767,11 +764,9 @@ export async function markOrderReady(orderId: string): Promise<UpdateOrderStatus
     return { ok: false, error: `${unweighed.length} per-KG item(s) still need to be weighed.` };
   }
 
-  // Recalculate total from all items
   let newTotal = 0;
   for (const item of items) {
     if (item.pricingType === "PER_KG") {
-      // Use weight × rate
       const calculated = Number(item.unitPrice) * Number(item.weightKg);
       newTotal += calculated;
     } else {

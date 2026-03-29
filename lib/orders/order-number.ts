@@ -1,12 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 
 /**
- * Generates a unique order number: ORD-YYYY-NNNNN (sequential per calendar year).
- * Same logic as the original Prisma version.
+ * Generates a unique order number scoped to a tenant:
+ * {SLUG}-{YYYY}-{NNNNN} e.g. BH-2026-00001
  */
-export async function generateOrderNumber(): Promise<string> {
+export async function generateOrderNumber(tenantSlug: string): Promise<string> {
   const year = new Date().getFullYear();
-  const prefix = `ORD-${year}-`;
+  const prefix = `${tenantSlug.toUpperCase()}-${year}-`;
 
   const supabase = await createClient();
   const { data: last } = await supabase

@@ -2,7 +2,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { auth } from "@/lib/auth";
+import { requireTenantAdmin } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
 import {
   serviceCategoryFormSchema,
@@ -13,14 +13,14 @@ import {
 
 export type ActionResult<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
-async function requireAdminId(): Promise<string | null> {
-  const session = await auth();
-  if (!session?.user?.id || session.user.role !== "ADMIN") return null;
-  return session.user.id;
+async function requireAdmin() {
+  return requireTenantAdmin();
 }
 
 export async function getServiceCategoriesForAdmin() {
-  if (!(await requireAdminId())) return [];
+  await requireAdmin();
+
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data } = await supabase
     .from("ServiceCategory")
@@ -30,7 +30,6 @@ export async function getServiceCategoriesForAdmin() {
 
   if (!data) return [];
 
-  // Sort nested items & convert defaultPrice to Decimal-compatible
   return data.map((c: any) => ({
     ...c,
     items: (c.items || [])
@@ -47,7 +46,9 @@ export async function getServiceCategoriesForAdmin() {
 }
 
 export async function getServiceCategoryById(id: string) {
-  if (!(await requireAdminId())) return null;
+  await requireAdmin();
+
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data } = await supabase
     .from("ServiceCategory")
@@ -73,7 +74,9 @@ export async function getServiceCategoryById(id: string) {
 }
 
 export async function getServiceItemForEdit(categoryId: string, itemId: string) {
-  if (!(await requireAdminId())) return null;
+  await requireAdmin();
+
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data } = await supabase
     .from("ServiceItem")
@@ -92,7 +95,8 @@ export async function getServiceItemForEdit(categoryId: string, itemId: string) 
 }
 
 export async function createServiceCategory(input: unknown): Promise<ActionResult<{ id: string }>> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireAdmin();
+
   const parsed = serviceCategoryFormSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
@@ -102,7 +106,7 @@ export async function createServiceCategory(input: unknown): Promise<ActionResul
     const supabase = await createClient();
     const { data: row, error } = await supabase
       .from("ServiceCategory")
-      .insert({ name, sortOrder, allowsCustomPricing, isActive })
+      .insert({ tenant_id: ctx.tenantId, name, sortOrder, allowsCustomPricing, isActive })
       .select("id")
       .single();
 
@@ -118,13 +122,15 @@ export async function createServiceCategory(input: unknown): Promise<ActionResul
 }
 
 export async function updateServiceCategory(input: unknown): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  await requireAdmin();
+
   const parsed = updateServiceCategorySchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
   const { id, name, sortOrder, allowsCustomPricing, isActive } = parsed.data;
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: existing } = await supabase
     .from("ServiceCategory")
@@ -135,7 +141,6 @@ export async function updateServiceCategory(input: unknown): Promise<ActionResul
   if (!existing) return { ok: false, error: "Category not found." };
 
   try {
-    // Update the category
     const { error: updateError } = await supabase
       .from("ServiceCategory")
       .update({ name, sortOrder, allowsCustomPricing, isActive })
@@ -143,7 +148,6 @@ export async function updateServiceCategory(input: unknown): Promise<ActionResul
 
     if (updateError) throw updateError;
 
-    // If custom pricing enabled, deactivate all catalog items (same as Prisma transaction)
     if (allowsCustomPricing) {
       const { error: deactivateError } = await supabase
         .from("ServiceItem")
@@ -164,7 +168,8 @@ export async function updateServiceCategory(input: unknown): Promise<ActionResul
 }
 
 export async function deactivateServiceCategory(id: string): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  await requireAdmin();
+
   try {
     const supabase = await createClient();
     const { error } = await supabase
@@ -187,8 +192,9 @@ export async function createServiceItem(
   categoryId: string,
   input: unknown,
 ): Promise<ActionResult<{ id: string }>> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  const ctx = await requireAdmin();
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: cat } = await supabase
     .from("ServiceCategory")
@@ -211,6 +217,7 @@ export async function createServiceItem(
     const { data: row, error } = await supabase
       .from("ServiceItem")
       .insert({
+        tenant_id: ctx.tenantId,
         serviceCategoryId: categoryId,
         name,
         defaultPrice,
@@ -234,13 +241,15 @@ export async function createServiceItem(
 }
 
 export async function updateServiceItem(input: unknown): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  await requireAdmin();
+
   const parsed = updateServiceItemSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
   const { id, serviceCategoryId, name, defaultPrice, pricingType, sortOrder, isActive } = parsed.data;
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: cat } = await supabase
     .from("ServiceCategory")
@@ -283,8 +292,9 @@ export async function updateServiceItem(input: unknown): Promise<ActionResult> {
 }
 
 export async function deactivateServiceItem(itemId: string, categoryId: string): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
+  await requireAdmin();
 
+  // RLS auto-filters by tenant_id
   const supabase = await createClient();
   const { data: item } = await supabase
     .from("ServiceItem")
@@ -314,10 +324,10 @@ export async function deactivateServiceItem(itemId: string, categoryId: string):
 }
 
 export async function deleteServiceCategory(id: string): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
-  const supabase = await createClient();
+  await requireAdmin();
 
-  // Check if any order items reference this category
+  // RLS auto-filters by tenant_id
+  const supabase = await createClient();
   const { count } = await supabase
     .from("OrderItem")
     .select("id", { count: "exact", head: true })
@@ -328,7 +338,6 @@ export async function deleteServiceCategory(id: string): Promise<ActionResult> {
   }
 
   try {
-    // Delete items first (cascade should handle, but be explicit)
     await supabase.from("ServiceItem").delete().eq("serviceCategoryId", id);
     const { error } = await supabase.from("ServiceCategory").delete().eq("id", id);
     if (error) throw error;
@@ -343,10 +352,10 @@ export async function deleteServiceCategory(id: string): Promise<ActionResult> {
 }
 
 export async function deleteServiceItem(itemId: string, categoryId: string): Promise<ActionResult> {
-  if (!(await requireAdminId())) return { ok: false, error: "Unauthorized." };
-  const supabase = await createClient();
+  await requireAdmin();
 
-  // Check if any order items reference this item
+  // RLS auto-filters by tenant_id
+  const supabase = await createClient();
   const { count } = await supabase
     .from("OrderItem")
     .select("id", { count: "exact", head: true })

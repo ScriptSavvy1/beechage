@@ -1,12 +1,8 @@
-﻿
-> beec-hage@0.1.0 build
-> next build
-
-   Γû▓ Next.js 15.5.14
+﻿   Γû▓ Next.js 15.5.14
    - Environments: .env
 
    Creating an optimized production build ...
- Γ£ô Compiled successfully in 46s
+ Γ£ô Compiled successfully in 9.5s
    Linting and checking validity of types ...
    Collecting page data ...
    Generating static pages (0/18) ...
@@ -30,7 +26,7 @@ Route (app)                                              Size  First Load JS
 Γö£ ╞Æ /admin/services/[categoryId]/items/new            2.22 kB         132 kB
 Γö£ ╞Æ /admin/services/new                               1.99 kB         132 kB
 Γö£ ╞Æ /admin/users                                       1.1 kB         106 kB
-Γö£ ╞Æ /admin/users/new                                  1.69 kB         132 kB
+Γö£ ╞Æ /admin/users/new                                   1.7 kB         132 kB
 Γö£ ╞Æ /api/health                                         141 B         102 kB
 Γö£ ╞Æ /api/orders/[orderId]/receipt                       141 B         102 kB
 Γö£ ╞Æ /laundry                                            172 B         105 kB
