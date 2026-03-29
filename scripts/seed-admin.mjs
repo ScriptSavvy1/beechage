@@ -1,5 +1,5 @@
 /**
- * Seed script: create initial tenant + admin user via Supabase Admin API.
+ * Seed script: create tenant + OWNER + ADMIN users via Supabase Admin API.
  *
  * Usage:
  *   node scripts/seed-admin.mjs
@@ -22,107 +22,114 @@ const supabase = createClient(url, key, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+const TENANT_ID = "00000000-0000-0000-0000-000000000001";
 const TENANT_NAME = "BeecHage";
 const TENANT_SLUG = "bh";
-const TENANT_ID = "00000000-0000-0000-0000-000000000001";
 
-const ADMIN_EMAIL = "admin@beechage.com";
-const ADMIN_PASSWORD = "Admin@123";
-const ADMIN_NAME = "Admin";
+const USERS = [
+  {
+    email: "owner@beechage.com",
+    password: "Owner@123",
+    name: "Owner",
+    role: "OWNER",
+  },
+  {
+    email: "admin@beechage.com",
+    password: "Admin@123",
+    name: "Admin",
+    role: "ADMIN",
+  },
+];
 
-async function main() {
-  // 1. Create default tenant
-  console.log(`Creating tenant: ${TENANT_NAME} (${TENANT_SLUG})`);
-  const { error: tenantError } = await supabase
+async function ensureTenant() {
+  console.log(`Ensuring tenant: ${TENANT_NAME} (${TENANT_SLUG})`);
+  const { error } = await supabase
     .from("tenants")
-    .upsert({
-      id: TENANT_ID,
-      name: TENANT_NAME,
-      slug: TENANT_SLUG,
-      plan: "pro",
-    }, { onConflict: "slug" });
-
-  if (tenantError) {
-    console.error("Error creating tenant:", tenantError.message);
+    .upsert(
+      { id: TENANT_ID, name: TENANT_NAME, slug: TENANT_SLUG, plan: "pro" },
+      { onConflict: "slug" }
+    );
+  if (error) {
+    console.error("Error creating tenant:", error.message);
     process.exit(1);
   }
-  console.log("Tenant created/verified.");
+  console.log("✓ Tenant ready.");
 
-  // 2. Create default branch
-  console.log("Creating default branch...");
+  // Ensure default branch
   const { error: branchError } = await supabase
     .from("branches")
-    .upsert({
-      tenant_id: TENANT_ID,
-      name: "Main Branch",
-      is_default: true,
-    }, { onConflict: "tenant_id,name" });
+    .upsert(
+      { tenant_id: TENANT_ID, name: "Main Branch", is_default: true },
+      { onConflict: "tenant_id,name" }
+    );
+  if (branchError) console.warn("Branch warning:", branchError.message);
+  else console.log("✓ Branch ready.");
+}
 
-  if (branchError) {
-    console.error("Error creating branch:", branchError.message);
-    // Non-fatal, continue
-  } else {
-    console.log("Branch created/verified.");
+async function ensureUser({ email, password, name, role }) {
+  console.log(`\nProcessing: ${email} (${role})`);
+
+  // Check if user already exists
+  const { data: existingUsers } = await supabase.auth.admin.listUsers();
+  const existing = existingUsers?.users?.find((u) => u.email === email);
+
+  if (existing) {
+    console.log(`  User exists (${existing.id}) — updating metadata...`);
+
+    // Update app_metadata
+    await supabase.auth.admin.updateUserById(existing.id, {
+      app_metadata: { tenant_id: TENANT_ID, role },
+    });
+
+    // Update public.users
+    await supabase
+      .from("users")
+      .update({ tenant_id: TENANT_ID, role })
+      .eq("id", existing.id);
+
+    // Ensure membership
+    await supabase
+      .from("tenant_memberships")
+      .upsert(
+        { user_id: existing.id, tenant_id: TENANT_ID, role, is_active: true },
+        { onConflict: "user_id,tenant_id" }
+      );
+
+    console.log(`  ✓ ${role} updated: ${email}`);
+    return;
   }
 
-  // 3. Create admin user with tenant_id in app_metadata
-  console.log(`Creating admin user: ${ADMIN_EMAIL}`);
+  // Create new user
   const { data, error } = await supabase.auth.admin.createUser({
-    email: ADMIN_EMAIL,
-    password: ADMIN_PASSWORD,
+    email,
+    password,
     email_confirm: true,
-    app_metadata: {
-      tenant_id: TENANT_ID,
-      role: "OWNER",
-    },
-    user_metadata: {
-      name: ADMIN_NAME,
-    },
+    app_metadata: { tenant_id: TENANT_ID, role },
+    user_metadata: { name },
   });
 
   if (error) {
-    if (error.message.includes("already been registered")) {
-      console.log("Admin user already exists — updating app_metadata...");
-
-      // Find existing user and update their app_metadata
-      const { data: existingUsers } = await supabase.auth.admin.listUsers();
-      const existing = existingUsers?.users?.find(u => u.email === ADMIN_EMAIL);
-      if (existing) {
-        await supabase.auth.admin.updateUserById(existing.id, {
-          app_metadata: {
-            tenant_id: TENANT_ID,
-            role: "OWNER",
-          },
-        });
-        console.log("Updated app_metadata for existing admin.");
-
-        // Also update public.users
-        await supabase
-          .from("users")
-          .update({ tenant_id: TENANT_ID, role: "OWNER" })
-          .eq("id", existing.id);
-
-        // Ensure membership exists
-        await supabase
-          .from("tenant_memberships")
-          .upsert({
-            user_id: existing.id,
-            tenant_id: TENANT_ID,
-            role: "OWNER",
-            is_active: true,
-          }, { onConflict: "user_id,tenant_id" });
-
-        console.log("Admin user fully configured.");
-      }
-      return;
-    }
-    console.error("Error creating admin:", error.message);
-    process.exit(1);
+    console.error(`  ✗ Error creating ${email}:`, error.message);
+    return;
   }
 
-  console.log("Admin user created:", data.user.id);
-  console.log(`\nCredentials:\n  Email:    ${ADMIN_EMAIL}\n  Password: ${ADMIN_PASSWORD}`);
-  console.log(`\nTenant: ${TENANT_NAME} (${TENANT_SLUG})`);
+  console.log(`  ✓ Created: ${data.user.id}`);
+}
+
+async function main() {
+  await ensureTenant();
+
+  for (const user of USERS) {
+    await ensureUser(user);
+  }
+
+  console.log("\n═══════════════════════════════════");
+  console.log("  Credentials:");
+  console.log("═══════════════════════════════════");
+  for (const u of USERS) {
+    console.log(`  ${u.role.padEnd(10)} ${u.email} / ${u.password}`);
+  }
+  console.log("═══════════════════════════════════\n");
 }
 
 main();
