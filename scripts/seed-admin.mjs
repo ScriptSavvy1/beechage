@@ -1,10 +1,11 @@
 /**
- * Seed script: create tenant + OWNER + ADMIN users via Supabase Admin API.
+ * Seed script: create tenant + OWNER + ADMIN users.
  *
- * Usage:
- *   node scripts/seed-admin.mjs
+ * Usage: node scripts/seed-admin.mjs
  *
- * Requires NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env
+ * OWNER creation uses the seed_set_owner() DB function which
+ * sets a bypass flag so the guard triggers allow it.
+ * This RPC is blocked for authenticated/anon users — only service_role can call it.
  */
 
 import "dotenv/config";
@@ -27,108 +28,100 @@ const TENANT_NAME = "BeecHage";
 const TENANT_SLUG = "bh";
 
 const USERS = [
-  {
-    email: "owner@beechage.com",
-    password: "Owner@123",
-    name: "Owner",
-    role: "OWNER",
-  },
-  {
-    email: "admin@beechage.com",
-    password: "Admin@123",
-    name: "Admin",
-    role: "ADMIN",
-  },
+  { email: "owner@beechage.com", password: "Owner@123", name: "Owner", role: "OWNER" },
+  { email: "admin@beechage.com", password: "Admin@123", name: "Admin", role: "ADMIN" },
 ];
 
 async function ensureTenant() {
   console.log(`Ensuring tenant: ${TENANT_NAME} (${TENANT_SLUG})`);
   const { error } = await supabase
     .from("tenants")
-    .upsert(
-      { id: TENANT_ID, name: TENANT_NAME, slug: TENANT_SLUG, plan: "pro" },
-      { onConflict: "slug" }
-    );
-  if (error) {
-    console.error("Error creating tenant:", error.message);
-    process.exit(1);
-  }
+    .upsert({ id: TENANT_ID, name: TENANT_NAME, slug: TENANT_SLUG, plan: "pro" }, { onConflict: "slug" });
+  if (error) { console.error("Tenant error:", error.message); process.exit(1); }
   console.log("✓ Tenant ready.");
 
-  // Ensure default branch
-  const { error: branchError } = await supabase
+  const { error: be } = await supabase
     .from("branches")
-    .upsert(
-      { tenant_id: TENANT_ID, name: "Main Branch", is_default: true },
-      { onConflict: "tenant_id,name" }
-    );
-  if (branchError) console.warn("Branch warning:", branchError.message);
+    .upsert({ tenant_id: TENANT_ID, name: "Main Branch", is_default: true }, { onConflict: "tenant_id,name" });
+  if (be) console.warn("Branch warning:", be.message);
   else console.log("✓ Branch ready.");
 }
 
 async function ensureUser({ email, password, name, role }) {
   console.log(`\nProcessing: ${email} (${role})`);
 
-  // Check if user already exists
   const { data: existingUsers } = await supabase.auth.admin.listUsers();
   const existing = existingUsers?.users?.find((u) => u.email === email);
 
   if (existing) {
-    console.log(`  User exists (${existing.id}) — updating metadata...`);
+    console.log(`  Exists (${existing.id}) — updating...`);
 
     // Update app_metadata
     await supabase.auth.admin.updateUserById(existing.id, {
       app_metadata: { tenant_id: TENANT_ID, role },
     });
 
-    // Update public.users
-    await supabase
-      .from("users")
-      .update({ tenant_id: TENANT_ID, role })
-      .eq("id", existing.id);
+    if (role === "OWNER") {
+      // Use the secure seed_set_owner RPC (sets bypass flag in same transaction)
+      const { error } = await supabase.rpc("seed_set_owner", {
+        p_user_id: existing.id,
+        p_tenant_id: TENANT_ID,
+      });
+      if (error) {
+        console.error("  seed_set_owner error:", error.message);
+        return;
+      }
+    } else {
+      await supabase.from("users").update({ tenant_id: TENANT_ID, role }).eq("id", existing.id);
+      await supabase
+        .from("tenant_memberships")
+        .upsert({ user_id: existing.id, tenant_id: TENANT_ID, role, is_active: true }, { onConflict: "user_id,tenant_id" });
+    }
 
-    // Ensure membership
-    await supabase
-      .from("tenant_memberships")
-      .upsert(
-        { user_id: existing.id, tenant_id: TENANT_ID, role, is_active: true },
-        { onConflict: "user_id,tenant_id" }
-      );
-
-    console.log(`  ✓ ${role} updated: ${email}`);
+    console.log(`  ✓ ${role} updated.`);
     return;
   }
 
-  // Create new user
+  // Create new user — trigger caps OWNER → ADMIN, we promote after
   const { data, error } = await supabase.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    app_metadata: { tenant_id: TENANT_ID, role },
+    email, password, email_confirm: true,
+    app_metadata: { tenant_id: TENANT_ID, role: role === "OWNER" ? "ADMIN" : role },
     user_metadata: { name },
   });
 
   if (error) {
-    console.error(`  ✗ Error creating ${email}:`, error.message);
+    console.error(`  ✗ Error:`, error.message);
     return;
   }
 
   console.log(`  ✓ Created: ${data.user.id}`);
+
+  if (role === "OWNER") {
+    // Promote via secure RPC
+    const { error: promoteErr } = await supabase.rpc("seed_set_owner", {
+      p_user_id: data.user.id,
+      p_tenant_id: TENANT_ID,
+    });
+    if (promoteErr) {
+      console.error("  ✗ Promotion error:", promoteErr.message);
+    } else {
+      // Also fix the app_metadata to say OWNER (was set to ADMIN during create)
+      await supabase.auth.admin.updateUserById(data.user.id, {
+        app_metadata: { tenant_id: TENANT_ID, role: "OWNER" },
+      });
+      console.log("  ✓ Promoted to OWNER");
+    }
+  }
 }
 
 async function main() {
   await ensureTenant();
-
-  for (const user of USERS) {
-    await ensureUser(user);
-  }
+  for (const user of USERS) await ensureUser(user);
 
   console.log("\n═══════════════════════════════════");
   console.log("  Credentials:");
   console.log("═══════════════════════════════════");
-  for (const u of USERS) {
-    console.log(`  ${u.role.padEnd(10)} ${u.email} / ${u.password}`);
-  }
+  for (const u of USERS) console.log(`  ${u.role.padEnd(10)} ${u.email} / ${u.password}`);
   console.log("═══════════════════════════════════\n");
 }
 

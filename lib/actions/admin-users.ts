@@ -7,6 +7,25 @@ import { requireTenantAdmin } from "@/lib/tenant";
 
 export type ActionResult<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
+// ─── Role Hierarchy ──────────────────────────────────────────
+// OWNER (100) > ADMIN (50) > RECEPTION (10) = LAUNDRY (10)
+const ROLE_RANK: Record<string, number> = {
+  OWNER: 100,
+  ADMIN: 50,
+  RECEPTION: 10,
+  LAUNDRY: 10,
+};
+
+/** Returns true if callerRole can assign targetRole */
+function canAssignRole(callerRole: string, targetRole: string): boolean {
+  const callerRank = ROLE_RANK[callerRole] ?? 0;
+  const targetRank = ROLE_RANK[targetRole] ?? 0;
+  // Caller can only assign roles strictly below their rank
+  // OWNER (100) can assign ADMIN (50), RECEPTION (10), LAUNDRY (10)
+  // ADMIN (50) can assign RECEPTION (10), LAUNDRY (10) — NOT ADMIN
+  return callerRank > targetRank;
+}
+
 // Service Role client — bypasses RLS, used for admin operations
 function getServiceRoleClient() {
   return createServerClient(
@@ -34,6 +53,15 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
   }
 
   const { email, name, password, role } = parsed.data;
+
+  // ── ROLE ESCALATION CHECK ──────────────────────────
+  // OWNER can create: ADMIN, RECEPTION, LAUNDRY
+  // ADMIN can create: RECEPTION, LAUNDRY
+  // Zod schema already blocks OWNER role assignment
+  if (!canAssignRole(ctx.role, role)) {
+    return { ok: false, error: `Your role (${ctx.role}) cannot create ${role} users. Only an OWNER can do this.` };
+  }
+  // ───────────────────────────────────────────────────
 
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return { ok: false, error: "System missing SUPABASE_SERVICE_ROLE_KEY configuration." };
@@ -64,7 +92,7 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
     }
 
     // The DB trigger auto-creates public.users + tenant_memberships rows
-    // via handle_new_user() reading from app_metadata
+    // The trigger also caps the role (OWNER blocked at DB level)
 
     revalidatePath("/admin/users/new");
     revalidatePath("/admin");
@@ -75,27 +103,106 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
   }
 }
 
+// ─── Update User Role ────────────────────────────────────────
+
+export async function updateUserRole(
+  targetUserId: string,
+  newRole: string,
+): Promise<ActionResult> {
+  const ctx = await requireTenantAdmin();
+
+  // Application-level checks (defense layer 1)
+  if (targetUserId === ctx.userId) {
+    return { ok: false, error: "Cannot change your own role." };
+  }
+  if (newRole === "OWNER") {
+    return { ok: false, error: "OWNER role cannot be assigned via the application." };
+  }
+  if (!canAssignRole(ctx.role, newRole)) {
+    return { ok: false, error: `Your role (${ctx.role}) cannot assign the ${newRole} role.` };
+  }
+
+  const supabaseAdmin = getServiceRoleClient();
+
+  // Verify target belongs to this tenant
+  const { data: targetMembership } = await supabaseAdmin
+    .from("tenant_memberships")
+    .select("role")
+    .eq("user_id", targetUserId)
+    .eq("tenant_id", ctx.tenantId)
+    .single();
+
+  if (!targetMembership) {
+    return { ok: false, error: "User not found in your organization." };
+  }
+
+  // Cannot change OWNER's role
+  if (targetMembership.role === "OWNER") {
+    return { ok: false, error: "Cannot change an OWNER's role." };
+  }
+
+  // ADMIN cannot change another ADMIN
+  if (ctx.role === "ADMIN" && targetMembership.role === "ADMIN") {
+    return { ok: false, error: "ADMIN cannot change another ADMIN's role." };
+  }
+
+  try {
+    // Use the secure DB function (defense layer 2)
+    const { error } = await supabaseAdmin.rpc("safe_update_member_role", {
+      p_caller_id: ctx.userId,
+      p_target_user_id: targetUserId,
+      p_tenant_id: ctx.tenantId,
+      p_new_role: newRole,
+    });
+
+    if (error) {
+      if (error.message.includes("ROLE_ESCALATION_BLOCKED")) {
+        return { ok: false, error: "Role change blocked: insufficient permissions." };
+      }
+      throw error;
+    }
+
+    revalidatePath("/admin/users");
+    revalidatePath("/admin");
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not update role." };
+  }
+}
+
+// ─── Delete / Deactivate ─────────────────────────────────────
+
 export async function deleteUser(userId: string): Promise<ActionResult> {
   const ctx = await requireTenantAdmin();
 
-  // Cannot delete yourself
   if (ctx.userId === userId) {
     return { ok: false, error: "Cannot delete your own account." };
   }
 
   const supabaseAdmin = getServiceRoleClient();
 
-  // Verify user belongs to this tenant (manual check — service_role bypasses RLS)
+  // Verify user belongs to this tenant
   const { data: targetUser } = await supabaseAdmin
-    .from("users")
-    .select("id, tenant_id")
-    .eq("id", userId)
+    .from("tenant_memberships")
+    .select("role")
+    .eq("user_id", userId)
     .eq("tenant_id", ctx.tenantId)
     .single();
 
   if (!targetUser) return { ok: false, error: "User not found in your organization." };
 
-  // Check for linked orders (scoped to tenant)
+  // Cannot delete OWNER
+  if (targetUser.role === "OWNER") {
+    return { ok: false, error: "Cannot delete an OWNER account." };
+  }
+
+  // ADMIN cannot delete another ADMIN
+  if (ctx.role === "ADMIN" && targetUser.role === "ADMIN") {
+    return { ok: false, error: "ADMIN cannot delete another ADMIN. Only OWNER can do this." };
+  }
+
+  // Check for linked orders
   const { count: orderCount } = await supabaseAdmin
     .from("Order")
     .select("id", { count: "exact", head: true })
@@ -106,7 +213,7 @@ export async function deleteUser(userId: string): Promise<ActionResult> {
     return { ok: false, error: `Cannot delete: user has ${orderCount} order(s). Deactivate instead.` };
   }
 
-  // Check for linked expenses (scoped to tenant)
+  // Check for linked expenses
   const { count: expenseCount } = await supabaseAdmin
     .from("Expense")
     .select("id", { count: "exact", head: true })
@@ -139,18 +246,27 @@ export async function deactivateUser(userId: string): Promise<ActionResult> {
 
   const supabaseAdmin = getServiceRoleClient();
 
-  // Verify user belongs to this tenant
-  const { data: targetUser } = await supabaseAdmin
-    .from("users")
-    .select("id, tenant_id")
-    .eq("id", userId)
+  // Verify user belongs to this tenant and check role
+  const { data: targetMembership } = await supabaseAdmin
+    .from("tenant_memberships")
+    .select("role")
+    .eq("user_id", userId)
     .eq("tenant_id", ctx.tenantId)
     .single();
 
-  if (!targetUser) return { ok: false, error: "User not found in your organization." };
+  if (!targetMembership) return { ok: false, error: "User not found in your organization." };
+
+  // Cannot deactivate OWNER
+  if (targetMembership.role === "OWNER") {
+    return { ok: false, error: "Cannot deactivate an OWNER account." };
+  }
+
+  // ADMIN cannot deactivate another ADMIN
+  if (ctx.role === "ADMIN" && targetMembership.role === "ADMIN") {
+    return { ok: false, error: "ADMIN cannot deactivate another ADMIN." };
+  }
 
   try {
-    // Deactivate in public.users
     const { error: userError } = await supabaseAdmin
       .from("users")
       .update({ isActive: false })
@@ -158,7 +274,6 @@ export async function deactivateUser(userId: string): Promise<ActionResult> {
 
     if (userError) throw userError;
 
-    // Deactivate membership
     const { error: memberError } = await supabaseAdmin
       .from("tenant_memberships")
       .update({ is_active: false })
