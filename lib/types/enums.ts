@@ -1,12 +1,11 @@
 export enum Role {
-  OWNER = "OWNER",
   ADMIN = "ADMIN",
   RECEPTION = "RECEPTION",
   LAUNDRY = "LAUNDRY",
 }
 
 /** Roles that have admin-level access within a tenant */
-export const ADMIN_ROLES = [Role.OWNER, Role.ADMIN] as const;
+export const ADMIN_ROLES = [Role.ADMIN] as const;
 
 export enum OrderStatus {
   IN_PROGRESS = "IN_PROGRESS",

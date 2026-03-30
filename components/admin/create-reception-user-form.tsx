@@ -10,7 +10,7 @@ import { createReceptionUser } from "@/lib/actions/admin-users";
 import { formInputClassName } from "@/lib/ui/form-classes";
 import { createReceptionUserSchema, type CreateReceptionUserInput } from "@/lib/validations/admin-users";
 
-export function CreateReceptionUserForm({ callerRole }: { callerRole: string }) {
+export function CreateReceptionUserForm() {
   const router = useRouter();
   const [serverError, setServerError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -58,9 +58,8 @@ export function CreateReceptionUserForm({ callerRole }: { callerRole: string }) 
             <input id="password" type="password" autoComplete="new-password" className={formInputClassName} disabled={isPending} {...register("password")} />
           </FormField>
 
-      <FormField label="Role" htmlFor="role" error={errors.role?.message} required>
+          <FormField label="Role" htmlFor="role" error={errors.role?.message} required>
             <select id="role" className={formInputClassName} disabled={isPending} {...register("role")}>
-              {callerRole === "OWNER" && <option value="ADMIN">Admin</option>}
               <option value="RECEPTION">Reception</option>
               <option value="LAUNDRY">Laundry</option>
             </select>

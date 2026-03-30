@@ -1,11 +1,10 @@
 /**
- * Seed script: create tenant + OWNER + ADMIN users.
+ * Seed script: create tenant + ADMIN user.
  *
  * Usage: node scripts/seed-admin.mjs
  *
- * OWNER creation uses the seed_set_owner() DB function which
- * sets a bypass flag so the guard triggers allow it.
- * This RPC is blocked for authenticated/anon users — only service_role can call it.
+ * One ADMIN per tenant — controls everything.
+ * ADMIN creates RECEPTION and LAUNDRY users via the app.
  */
 
 import "dotenv/config";
@@ -27,10 +26,9 @@ const TENANT_ID = "00000000-0000-0000-0000-000000000001";
 const TENANT_NAME = "BeecHage";
 const TENANT_SLUG = "bh";
 
-const USERS = [
-  { email: "owner@beechage.com", password: "Owner@123", name: "Owner", role: "OWNER" },
-  { email: "admin@beechage.com", password: "Admin@123", name: "Admin", role: "ADMIN" },
-];
+const ADMIN_EMAIL = "admin@beechage.com";
+const ADMIN_PASSWORD = "Admin@123";
+const ADMIN_NAME = "Admin";
 
 async function ensureTenant() {
   console.log(`Ensuring tenant: ${TENANT_NAME} (${TENANT_SLUG})`);
@@ -47,81 +45,53 @@ async function ensureTenant() {
   else console.log("✓ Branch ready.");
 }
 
-async function ensureUser({ email, password, name, role }) {
-  console.log(`\nProcessing: ${email} (${role})`);
+async function ensureAdmin() {
+  console.log(`\nProcessing: ${ADMIN_EMAIL} (ADMIN)`);
 
   const { data: existingUsers } = await supabase.auth.admin.listUsers();
-  const existing = existingUsers?.users?.find((u) => u.email === email);
+  const existing = existingUsers?.users?.find((u) => u.email === ADMIN_EMAIL);
 
   if (existing) {
-    console.log(`  Exists (${existing.id}) — updating...`);
+    console.log(`  Exists (${existing.id}) — updating to ADMIN...`);
 
-    // Update app_metadata
     await supabase.auth.admin.updateUserById(existing.id, {
-      app_metadata: { tenant_id: TENANT_ID, role },
+      app_metadata: { tenant_id: TENANT_ID, role: "ADMIN" },
     });
 
-    if (role === "OWNER") {
-      // Use the secure seed_set_owner RPC (sets bypass flag in same transaction)
-      const { error } = await supabase.rpc("seed_set_owner", {
-        p_user_id: existing.id,
-        p_tenant_id: TENANT_ID,
-      });
-      if (error) {
-        console.error("  seed_set_owner error:", error.message);
-        return;
-      }
-    } else {
-      await supabase.from("users").update({ tenant_id: TENANT_ID, role }).eq("id", existing.id);
-      await supabase
-        .from("tenant_memberships")
-        .upsert({ user_id: existing.id, tenant_id: TENANT_ID, role, is_active: true }, { onConflict: "user_id,tenant_id" });
-    }
+    await supabase.from("users").update({ tenant_id: TENANT_ID, role: "ADMIN" }).eq("id", existing.id);
 
-    console.log(`  ✓ ${role} updated.`);
+    await supabase
+      .from("tenant_memberships")
+      .upsert({ user_id: existing.id, tenant_id: TENANT_ID, role: "ADMIN", is_active: true }, { onConflict: "user_id,tenant_id" });
+
+    console.log("  ✓ ADMIN updated.");
     return;
   }
 
-  // Create new user — trigger caps OWNER → ADMIN, we promote after
   const { data, error } = await supabase.auth.admin.createUser({
-    email, password, email_confirm: true,
-    app_metadata: { tenant_id: TENANT_ID, role: role === "OWNER" ? "ADMIN" : role },
-    user_metadata: { name },
+    email: ADMIN_EMAIL,
+    password: ADMIN_PASSWORD,
+    email_confirm: true,
+    app_metadata: { tenant_id: TENANT_ID, role: "ADMIN" },
+    user_metadata: { name: ADMIN_NAME },
   });
 
   if (error) {
-    console.error(`  ✗ Error:`, error.message);
+    console.error("  ✗ Error:", error.message);
     return;
   }
 
   console.log(`  ✓ Created: ${data.user.id}`);
-
-  if (role === "OWNER") {
-    // Promote via secure RPC
-    const { error: promoteErr } = await supabase.rpc("seed_set_owner", {
-      p_user_id: data.user.id,
-      p_tenant_id: TENANT_ID,
-    });
-    if (promoteErr) {
-      console.error("  ✗ Promotion error:", promoteErr.message);
-    } else {
-      // Also fix the app_metadata to say OWNER (was set to ADMIN during create)
-      await supabase.auth.admin.updateUserById(data.user.id, {
-        app_metadata: { tenant_id: TENANT_ID, role: "OWNER" },
-      });
-      console.log("  ✓ Promoted to OWNER");
-    }
-  }
 }
 
 async function main() {
   await ensureTenant();
-  for (const user of USERS) await ensureUser(user);
+  await ensureAdmin();
 
   console.log("\n═══════════════════════════════════");
   console.log("  Credentials:");
   console.log("═══════════════════════════════════");
-  for (const u of USERS) console.log(`  ${u.role.padEnd(10)} ${u.email} / ${u.password}`);
+  console.log(`  ADMIN      ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
   console.log("═══════════════════════════════════\n");
 }
 

@@ -70,7 +70,7 @@ export async function requireTenantRole(allowedRoles: string[]): Promise<TenantC
 }
 
 /**
- * Requires admin-level access (OWNER or ADMIN).
+ * Requires admin-level access (ADMIN only).
  */
 export async function requireTenantAdmin(): Promise<TenantContext> {
   return requireTenantRole(ADMIN_ROLES as unknown as string[]);

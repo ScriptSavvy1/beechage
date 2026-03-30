@@ -40,7 +40,7 @@ export async function requireRole(allowedRoles: string[]) {
   return session.user;
 }
 
-/** Check if user has admin-level access (OWNER or ADMIN) */
+/** Check if user has admin-level access */
 export function isAdminRole(role: string): boolean {
   return (ADMIN_ROLES as readonly string[]).includes(role);
 }

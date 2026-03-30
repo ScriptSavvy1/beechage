@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
 /**
- * Middleware — routing guards for OWNER, ADMIN, RECEPTION, and LAUNDRY roles.
+ * Middleware — routing guards for ADMIN, RECEPTION, and LAUNDRY roles.
  * Reads role from app_metadata (secure, admin-only writable).
  */
 export async function middleware(req: NextRequest) {
@@ -25,7 +25,7 @@ export async function middleware(req: NextRequest) {
 
   if (isLogin) {
     if (isLoggedIn) {
-      const home = (role === "ADMIN" || role === "OWNER") ? "/admin" : role === "LAUNDRY" ? "/laundry" : "/reception";
+      const home = role === "ADMIN" ? "/admin" : role === "LAUNDRY" ? "/laundry" : "/reception";
       return NextResponse.redirect(new URL(home, req.url));
     }
     return supabaseResponse;
@@ -38,23 +38,23 @@ export async function middleware(req: NextRequest) {
   }
 
   if (pathname === "/") {
-    const home = (role === "ADMIN" || role === "OWNER") ? "/admin" : role === "LAUNDRY" ? "/laundry" : "/reception";
+    const home = role === "ADMIN" ? "/admin" : role === "LAUNDRY" ? "/laundry" : "/reception";
     return NextResponse.redirect(new URL(home, req.url));
   }
 
-  // OWNER and ADMIN both access /admin routes
-  if (pathname.startsWith("/admin") && role !== "ADMIN" && role !== "OWNER") {
+  // Only ADMIN can access /admin routes
+  if (pathname.startsWith("/admin") && role !== "ADMIN") {
     const home = role === "LAUNDRY" ? "/laundry" : "/reception";
     return NextResponse.redirect(new URL(home, req.url));
   }
 
   if (pathname.startsWith("/reception") && role !== "RECEPTION") {
-    const home = (role === "ADMIN" || role === "OWNER") ? "/admin" : "/laundry";
+    const home = role === "ADMIN" ? "/admin" : "/laundry";
     return NextResponse.redirect(new URL(home, req.url));
   }
 
   if (pathname.startsWith("/laundry") && role !== "LAUNDRY") {
-    const home = (role === "ADMIN" || role === "OWNER") ? "/admin" : "/reception";
+    const home = role === "ADMIN" ? "/admin" : "/reception";
     return NextResponse.redirect(new URL(home, req.url));
   }
 

@@ -49,9 +49,7 @@ export default async function AdminUsersPage() {
                   <td className="px-4 py-3">{user.email}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      user.role === "OWNER"
-                        ? "bg-amber-100 text-amber-800"
-                        : user.role === "ADMIN"
+                      user.role === "ADMIN"
                         ? "bg-purple-100 text-purple-800"
                         : user.role === "LAUNDRY"
                         ? "bg-blue-100 text-blue-800"
