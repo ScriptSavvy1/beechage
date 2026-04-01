@@ -116,7 +116,10 @@ export default async function MyOrdersPage({ searchParams }: Props) {
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
                   {filteredOrders.map((order) => {
-                    const remaining = order.totalAmount.toNumber() - order.paidAmount.toNumber();
+                    const orderDiscount = Number(order.discount ?? 0);
+                    const orderTotal = order.totalAmount.toNumber();
+                    const effectiveTotal = orderTotal - orderDiscount;
+                    const remaining = effectiveTotal - order.paidAmount.toNumber();
                     return (
                       <tr key={order.id} className="transition-colors hover:bg-zinc-50/80">
                         <td className="px-4 py-3 font-mono text-xs font-medium">
@@ -136,7 +139,7 @@ export default async function MyOrdersPage({ searchParams }: Props) {
                         <td className="px-4 py-3">
                           <div className="flex flex-col gap-1.5">
                             <PaymentStatusPill status={order.paymentStatus} />
-                            <RecordPaymentForm orderId={order.id} remaining={remaining} />
+                            <RecordPaymentForm orderId={order.id} remaining={remaining > 0 ? remaining : 0} currentDiscount={orderDiscount} totalAmount={orderTotal} />
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -156,7 +159,10 @@ export default async function MyOrdersPage({ searchParams }: Props) {
           {/* ── Mobile cards (hidden on desktop) ── */}
           <div className="flex flex-col gap-3 md:hidden">
             {filteredOrders.map((order) => {
-              const remaining = order.totalAmount.toNumber() - order.paidAmount.toNumber();
+              const orderDiscount = Number(order.discount ?? 0);
+              const orderTotal = order.totalAmount.toNumber();
+              const effectiveTotal = orderTotal - orderDiscount;
+              const remaining = effectiveTotal - order.paidAmount.toNumber();
               return (
                 <div
                   key={order.id}
@@ -180,11 +186,9 @@ export default async function MyOrdersPage({ searchParams }: Props) {
                     <span className="text-xs text-zinc-500">{order._count.items} items</span>
                   </div>
                   <p className="mt-2 text-xs text-zinc-500">{dateFmt.format(order.createdAt)}</p>
-                  {remaining > 0 && (
-                    <div className="mt-3 border-t border-zinc-100 pt-3">
-                      <RecordPaymentForm orderId={order.id} remaining={remaining} />
-                    </div>
-                  )}
+                  <div className="mt-3 border-t border-zinc-100 pt-3">
+                    <RecordPaymentForm orderId={order.id} remaining={remaining > 0 ? remaining : 0} currentDiscount={orderDiscount} totalAmount={orderTotal} />
+                  </div>
                 </div>
               );
             })}

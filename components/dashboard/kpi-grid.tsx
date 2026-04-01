@@ -13,7 +13,7 @@ export function KpiGrid({ kpis, rangeLabel, salesFootnote }: Props) {
     kpis.netProfit > 0 ? "positive" : kpis.netProfit < 0 ? "negative" : "neutral";
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <KpiCard
         title="Sales"
         subtitle={`Order revenue · ${rangeLabel}`}
@@ -31,6 +31,12 @@ export function KpiGrid({ kpis, rangeLabel, salesFootnote }: Props) {
         title="Orders"
         subtitle="All statuses in range"
         value={kpis.orderCount.toLocaleString()}
+      />
+      <KpiCard
+        title="Discounts"
+        subtitle="Total discounts given"
+        value={formatCurrency(kpis.totalDiscounts)}
+        tone={kpis.totalDiscounts > 0 ? "negative" : "neutral"}
       />
     </div>
   );

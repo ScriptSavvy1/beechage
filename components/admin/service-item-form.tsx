@@ -36,7 +36,7 @@ export function ServiceItemForm(props: Props) {
       ? props.defaultValues
       : {
           name: "",
-          defaultPrice: 0.01,
+          defaultPrice: 0,
           pricingType: "FIXED",
           sortOrder: 10,
           isActive: true,
@@ -125,12 +125,13 @@ export function ServiceItemForm(props: Props) {
             <input
               id="defaultPrice"
               type="number"
-              min={0.01}
+              min={0}
               step={0.01}
               className={formInputClassName}
               disabled={isPending}
               {...register("defaultPrice", { valueAsNumber: true })}
             />
+            <p className="mt-1 text-xs text-zinc-500">Set to 0 for free items (won&apos;t count toward revenue)</p>
           </FormField>
 
           <FormField label="Sort order" htmlFor="sortOrder" error={errors.sortOrder?.message} required>

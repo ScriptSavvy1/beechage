@@ -21,7 +21,7 @@ export function CreateReceptionUserForm() {
     formState: { errors },
   } = useForm<CreateReceptionUserInput>({
     resolver: zodResolver(createReceptionUserSchema),
-    defaultValues: { email: "", name: "", password: "", role: "RECEPTION" },
+    defaultValues: { email: "", name: "", password: "", role: "RECEPTION", branch: "" },
   });
 
   const onSubmit = (data: CreateReceptionUserInput) => {
@@ -63,6 +63,10 @@ export function CreateReceptionUserForm() {
               <option value="RECEPTION">Reception</option>
               <option value="LAUNDRY">Laundry</option>
             </select>
+          </FormField>
+
+          <FormField label="Branch" htmlFor="branch" error={errors.branch?.message} required>
+            <input id="branch" placeholder="e.g. Main Branch, Downtown" className={formInputClassName} disabled={isPending} {...register("branch")} />
           </FormField>
         </div>
 

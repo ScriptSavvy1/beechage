@@ -37,7 +37,7 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
   }
 
-  const { email, name, password, role } = parsed.data;
+  const { email, name, password, role, branch } = parsed.data;
 
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return { ok: false, error: "System missing SUPABASE_SERVICE_ROLE_KEY configuration." };
@@ -46,6 +46,28 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
   const supabaseAdmin = getServiceRoleClient();
 
   try {
+    // Look up or create branch
+    let branchId: string | null = null;
+    const { data: existingBranch } = await supabaseAdmin
+      .from("branches")
+      .select("id")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("name", branch.trim())
+      .single();
+
+    if (existingBranch) {
+      branchId = existingBranch.id;
+    } else {
+      const { data: newBranch, error: branchError } = await supabaseAdmin
+        .from("branches")
+        .insert({ tenant_id: ctx.tenantId, name: branch.trim(), is_default: false })
+        .select("id")
+        .single();
+
+      if (branchError) throw branchError;
+      branchId = newBranch.id;
+    }
+
     const { data: user, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
@@ -64,6 +86,15 @@ export async function createReceptionUser(input: unknown): Promise<ActionResult<
         return { ok: false, error: "A user with this email already exists." };
       }
       throw error;
+    }
+
+    // Assign branch to membership
+    if (branchId) {
+      await supabaseAdmin
+        .from("tenant_memberships")
+        .update({ branch_id: branchId })
+        .eq("user_id", user.user.id)
+        .eq("tenant_id", ctx.tenantId);
     }
 
     revalidatePath("/admin/users/new");

@@ -400,7 +400,7 @@ function OrderItemRow({
               <option value="">Select item</option>
               {(cat?.items ?? []).map((i) => (
                 <option key={i.id} value={i.id}>
-                  {i.name} {i.pricingType === "PER_KG" ? `(⚖️ ${formatCurrency(i.defaultPrice)}/kg)` : `(${formatCurrency(i.defaultPrice)})`}
+                  {i.name} {i.defaultPrice === 0 ? "(FREE)" : i.pricingType === "PER_KG" ? `(⚖️ ${formatCurrency(i.defaultPrice)}/kg)` : `(${formatCurrency(i.defaultPrice)})`}
                 </option>
               ))}
             </select>

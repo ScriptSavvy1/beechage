@@ -83,6 +83,7 @@ export async function getMyOrdersForReception(filters: OrderFilters = {}) {
       createdAt,
       totalAmount,
       paidAmount,
+      discount,
       paymentStatus,
       orderStatus,
       notes,
@@ -118,6 +119,7 @@ export async function getMyOrdersForReception(filters: OrderFilters = {}) {
     createdAt: new Date(o.createdAt),
     totalAmount: { toNumber: () => Number(o.totalAmount), toString: () => String(o.totalAmount) },
     paidAmount: { toNumber: () => Number(o.paidAmount), toString: () => String(o.paidAmount) },
+    discount: Number(o.discount ?? 0),
     paymentStatus: o.paymentStatus as PaymentStatus,
     orderStatus: o.orderStatus as OrderStatus,
     notes: o.notes,
@@ -484,7 +486,7 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
   const supabase = await createClient();
   const { data: order } = await supabase
     .from("Order")
-    .select("id, createdById, totalAmount, paidAmount, orderStatus")
+    .select("id, createdById, totalAmount, paidAmount, discount, orderStatus")
     .eq("id", orderId)
     .single();
 
@@ -506,17 +508,18 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
   }
 
   const totalAmount = Number(order.totalAmount);
+  const discount = Number(order.discount);
   const paidAmount = Number(order.paidAmount);
+  const effectiveTotal = totalAmount - discount;
 
-  const remaining = totalAmount - paidAmount;
+  const remaining = effectiveTotal - paidAmount;
   if (amount > remaining + 0.001) {
     return { ok: false, error: `Amount exceeds remaining balance ($${remaining.toFixed(2)}).` };
   }
 
   const newPaid = paidAmount + amount;
-  const newRemaining = totalAmount - newPaid;
-  const DISCOUNT_TOLERANCE = 5;
-  const paymentStatus = newRemaining <= DISCOUNT_TOLERANCE ? PaymentStatus.PAID
+  const newRemaining = effectiveTotal - newPaid;
+  const paymentStatus = newRemaining <= 0.01 ? PaymentStatus.PAID
     : newPaid > 0 ? PaymentStatus.PARTIALLY_PAID
     : PaymentStatus.UNPAID;
 
@@ -534,6 +537,68 @@ export async function recordPayment(input: unknown): Promise<RecordPaymentResult
   } catch (e) {
     console.error(e);
     return { ok: false, error: "Could not record payment. Try again." };
+  }
+}
+
+// ─── Discount ────────────────────────────────────────────────
+
+const applyDiscountSchema = z.object({
+  orderId: z.string().min(1),
+  discount: z.number().min(0, "Discount cannot be negative"),
+});
+
+export async function applyDiscount(input: unknown): Promise<RecordPaymentResult> {
+  const session = await auth();
+  if (!session?.user?.id || session.user.role !== "RECEPTION") {
+    return { ok: false, error: "Unauthorized." };
+  }
+
+  const parsed = applyDiscountSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid data." };
+  }
+
+  const { orderId, discount } = parsed.data;
+
+  const supabase = await createClient();
+  const { data: order } = await supabase
+    .from("Order")
+    .select("id, createdById, totalAmount, paidAmount")
+    .eq("id", orderId)
+    .single();
+
+  if (!order || order.createdById !== session.user.id) {
+    return { ok: false, error: "Order not found." };
+  }
+
+  const totalAmount = Number(order.totalAmount);
+  const paidAmount = Number(order.paidAmount);
+
+  if (discount > totalAmount) {
+    return { ok: false, error: "Discount cannot exceed order total." };
+  }
+
+  // Recalculate payment status with discount applied
+  const effectiveTotal = totalAmount - discount;
+  const newRemaining = effectiveTotal - paidAmount;
+  const paymentStatus = newRemaining <= 0.01 ? PaymentStatus.PAID
+    : paidAmount > 0 ? PaymentStatus.PARTIALLY_PAID
+    : PaymentStatus.UNPAID;
+
+  try {
+    const { error } = await supabase
+      .from("Order")
+      .update({ discount, paymentStatus })
+      .eq("id", orderId);
+
+    if (error) throw error;
+
+    revalidatePath("/reception/orders");
+    revalidatePath(`/reception/orders/${orderId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Could not apply discount. Try again." };
   }
 }
 
@@ -574,6 +639,7 @@ export async function getOrderById(orderId: string) {
     ...order,
     totalAmount: { toNumber: () => Number(order.totalAmount), toString: () => String(order.totalAmount) },
     paidAmount: { toNumber: () => Number(order.paidAmount), toString: () => String(order.paidAmount) },
+    discount: { toNumber: () => Number(order.discount ?? 0), toString: () => String(order.discount ?? 0) },
     createdAt: new Date(order.createdAt),
     createdBy: Array.isArray(order.createdBy) ? order.createdBy[0] : order.createdBy,
     hasPendingKg,

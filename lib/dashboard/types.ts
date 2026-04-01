@@ -15,6 +15,7 @@ export type DashboardKpis = {
   expenses: number;
   netProfit: number;
   orderCount: number;
+  totalDiscounts: number;
 };
 
 export type TimeSeriesPoint = {

@@ -236,6 +236,7 @@ CREATE TABLE IF NOT EXISTS public."Order" (
   "customerPhone" TEXT NOT NULL,
   "totalAmount"   NUMERIC(12,2) NOT NULL,
   "paidAmount"    NUMERIC(12,2) NOT NULL DEFAULT 0,
+  discount        NUMERIC(12,2) NOT NULL DEFAULT 0,
   "paymentStatus" TEXT NOT NULL DEFAULT 'UNPAID'
                   CHECK ("paymentStatus" IN ('UNPAID', 'PARTIALLY_PAID', 'PAID')),
   "orderStatus"   TEXT NOT NULL DEFAULT 'IN_PROGRESS'

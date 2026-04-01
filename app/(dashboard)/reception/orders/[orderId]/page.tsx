@@ -34,7 +34,9 @@ export default async function OrderDetailPage({ params }: Props) {
 
   const totalAmount = order.totalAmount.toNumber();
   const paidAmount = order.paidAmount.toNumber();
-  const remaining = totalAmount - paidAmount;
+  const discountAmount = order.discount.toNumber();
+  const effectiveTotal = totalAmount - discountAmount;
+  const remaining = effectiveTotal - paidAmount;
   const isInProgress = order.orderStatus === "IN_PROGRESS";
   const hasPendingKg = order.hasPendingKg;
 
@@ -195,6 +197,18 @@ export default async function OrderDetailPage({ params }: Props) {
               <span className="text-zinc-600">Total</span>
               <span className="font-semibold text-zinc-900">{formatCurrency(totalAmount.toFixed(2))}</span>
             </div>
+            {discountAmount > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-amber-700">Discount</span>
+                <span className="font-medium text-amber-700">-{formatCurrency(discountAmount.toFixed(2))}</span>
+              </div>
+            )}
+            {discountAmount > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-zinc-600">Effective Total</span>
+                <span className="font-semibold text-zinc-900">{formatCurrency(effectiveTotal.toFixed(2))}</span>
+              </div>
+            )}
             <div className="flex justify-between text-sm">
               <span className="text-zinc-600">Paid</span>
               <span className="font-medium text-emerald-700">{formatCurrency(paidAmount.toFixed(2))}</span>
@@ -208,9 +222,9 @@ export default async function OrderDetailPage({ params }: Props) {
           </div>
         )}
 
-        {remaining > 0 && !hasPendingKg && (
+        {!hasPendingKg && (
           <div className="mt-4">
-            <RecordPaymentForm orderId={order.id} remaining={remaining} />
+            <RecordPaymentForm orderId={order.id} remaining={remaining > 0 ? remaining : 0} currentDiscount={discountAmount} totalAmount={totalAmount} />
           </div>
         )}
       </section>

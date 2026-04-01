@@ -5,6 +5,7 @@ export const createReceptionUserSchema = z.object({
   name: z.string().trim().max(120).optional().nullable(),
   password: z.string().min(8, "Password must be at least 8 characters"),
   role: z.enum(["RECEPTION", "LAUNDRY"]),
+  branch: z.string().trim().min(1, "Branch name is required").max(120),
 });
 
 export type CreateReceptionUserInput = z.infer<typeof createReceptionUserSchema>;
