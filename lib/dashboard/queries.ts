@@ -59,10 +59,10 @@ async function computeSalesTotal(f: DashboardFilters): Promise<number> {
       .reduce((sum, i) => sum + toNumber(i.lineTotal), 0);
   }
 
-  // No category filter: sum order (totalAmount - discount)
+  // No category filter: sum order totalAmounts
   let query = supabase
     .from("Order")
-    .select("totalAmount, discount")
+    .select("totalAmount")
     .gte("createdAt", f.from.toISOString())
     .lte("createdAt", f.to.toISOString());
 
@@ -71,7 +71,7 @@ async function computeSalesTotal(f: DashboardFilters): Promise<number> {
   const { data: orders } = await query;
   if (!orders) return 0;
 
-  return orders.reduce((sum, o) => sum + toNumber(o.totalAmount) - toNumber(o.discount), 0);
+  return orders.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
 }
 
 async function computeExpensesTotal(f: DashboardFilters): Promise<number> {
@@ -119,29 +119,34 @@ async function computeOrderCount(f: DashboardFilters): Promise<number> {
 }
 
 async function computeDiscountsTotal(f: DashboardFilters): Promise<number> {
-  const supabase = await createClient();
-  let query = supabase
-    .from("Order")
-    .select("discount")
-    .gte("createdAt", f.from.toISOString())
-    .lte("createdAt", f.to.toISOString())
-    .gt("discount", 0);
+  try {
+    const supabase = await createClient();
+    let query = supabase
+      .from("Order")
+      .select("discount")
+      .gte("createdAt", f.from.toISOString())
+      .lte("createdAt", f.to.toISOString())
+      .gt("discount", 0);
 
-  if (f.userId) query = query.eq("createdById", f.userId);
+    if (f.userId) query = query.eq("createdById", f.userId);
 
-  const { data: orders } = await query;
-  if (!orders) return 0;
+    const { data: orders, error } = await query;
+    if (error || !orders) return 0;
 
-  return orders.reduce((sum, o) => sum + toNumber(o.discount), 0);
+    return orders.reduce((sum, o) => sum + toNumber((o as any).discount), 0);
+  } catch {
+    return 0;
+  }
 }
 
 async function getKpis(f: DashboardFilters): Promise<DashboardKpis> {
-  const [sales, expenses, orderCount, totalDiscounts] = await Promise.all([
+  const [grossSales, expenses, orderCount, totalDiscounts] = await Promise.all([
     computeSalesTotal(f),
     computeExpensesTotal(f),
     computeOrderCount(f),
     computeDiscountsTotal(f),
   ]);
+  const sales = grossSales - totalDiscounts;
   return {
     sales,
     expenses,

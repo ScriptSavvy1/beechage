@@ -40,7 +40,7 @@ export async function getServiceCategoriesForAdmin() {
       .map((i: any) => ({
         ...i,
         pricingType: i.pricingType || "FIXED",
-        defaultPrice: { toNumber: () => Number(i.defaultPrice), toString: () => String(i.defaultPrice) },
+        defaultPrice: Number(i.defaultPrice),
       })),
   }));
 }
@@ -68,7 +68,7 @@ export async function getServiceCategoryById(id: string) {
       .map((i: any) => ({
         ...i,
         pricingType: i.pricingType || "FIXED",
-        defaultPrice: { toNumber: () => Number(i.defaultPrice), toString: () => String(i.defaultPrice) },
+        defaultPrice: Number(i.defaultPrice),
       })),
   };
 }
@@ -90,7 +90,7 @@ export async function getServiceItemForEdit(categoryId: string, itemId: string) 
   return {
     ...data,
     pricingType: data.pricingType || "FIXED",
-    defaultPrice: { toNumber: () => Number(data.defaultPrice), toString: () => String(data.defaultPrice) },
+    defaultPrice: Number(data.defaultPrice),
   };
 }
 
